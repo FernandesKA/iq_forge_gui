@@ -463,8 +463,8 @@ void plotSpectrum(const char* plotId, const std::vector<float>& db, double sampl
     ImPlot::SetupAxes("Frequency (Hz, baseband)", "Power (dBFS)");
     if (!db.empty()) {
       auto [minIt, maxIt] = std::minmax_element(db.begin(), db.end());
-      constrainAxisToData(ImAxis_X1, -sampleRateHz / 2.0, sampleRateHz / 2.0, 0.02);
-      constrainAxisToData(ImAxis_Y1, *minIt, *maxIt, 0.1);
+      softenAxisToData(ImAxis_X1, -sampleRateHz / 2.0, sampleRateHz / 2.0, view.zoom, 0.02);
+      softenAxisToData(ImAxis_Y1, *minIt, *maxIt, view.zoom, 0.1);
       if (fitRequested) {
         // X (frequency) fits flush; Y gets the same margin as the pan
         // limit above so the curve isn't drawn right up to the border.

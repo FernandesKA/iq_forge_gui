@@ -131,8 +131,8 @@ void drawSpectrumViewerPanel(AppState& state) {
   } else if (ImPlot::BeginPlot("##sweepspectrum", ImVec2(-1, 400))) {
     ImPlot::SetupAxes("Frequency (Hz)", "Power (dBFS)");
     auto [minIt, maxIt] = std::minmax_element(state.sweepSpectrumDb.begin(), state.sweepSpectrumDb.end());
-    constrainAxisToData(ImAxis_X1, state.sweepRangeStartHz, state.sweepRangeEndHz, 0.02);
-    constrainAxisToData(ImAxis_Y1, *minIt, *maxIt, 0.1);
+    softenAxisToData(ImAxis_X1, state.sweepRangeStartHz, state.sweepRangeEndHz, g_sweepZoom, 0.02);
+    softenAxisToData(ImAxis_Y1, *minIt, *maxIt, g_sweepZoom, 0.1);
     if (fitRequested) {
       ImPlot::SetupAxisLimits(ImAxis_X1, state.sweepRangeStartHz, state.sweepRangeEndHz, ImPlotCond_Always);
       fitAxisWithMargin(ImAxis_Y1, *minIt, *maxIt, 0.1);

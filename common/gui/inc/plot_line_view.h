@@ -173,8 +173,8 @@ void drawLineView(const char* plotId, const char* yLabel, size_t count, bool res
     if (hasData) {
       double lo = 0.0, hi = 0.0;
       computeYRange(lo, hi);
-      constrainAxisToData(ImAxis_X1, 0.0, static_cast<double>(count - 1), 0.05);
-      constrainAxisToData(ImAxis_Y1, lo, hi, 0.1);
+      softenAxisToData(ImAxis_X1, 0.0, static_cast<double>(count - 1), view.zoom, 0.05);
+      softenAxisToData(ImAxis_Y1, lo, hi, view.zoom, 0.1);
       if (fitRequested) {
         // Written to xLink directly (not just via SetupAxisLimits) so a
         // fit on this plot is immediately visible to its siblings too, even

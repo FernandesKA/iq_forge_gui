@@ -49,8 +49,8 @@ void plotConstellation(const char* plotId, const Sample* data, size_t count, Con
       }
       // Same range on both axes (not each fit to its own I/Q span) so a
       // unit-amplitude signal reads as a circle, not a distorted ellipse.
-      constrainAxisToData(ImAxis_X1, lo, hi, 0.1);
-      constrainAxisToData(ImAxis_Y1, lo, hi, 0.1);
+      softenAxisToData(ImAxis_X1, lo, hi, view.zoom, 0.1);
+      softenAxisToData(ImAxis_Y1, lo, hi, view.zoom, 0.1);
       if (fitRequested) {
         fitAxisWithMargin(ImAxis_X1, lo, hi, 0.1);
         fitAxisWithMargin(ImAxis_Y1, lo, hi, 0.1);

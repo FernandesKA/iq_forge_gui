@@ -232,6 +232,57 @@ inline void constrainAxisToData(ImAxis axis, double lo, double hi, double margin
   ImPlot::SetupAxisLimitsConstraints(axis, lo - margin, hi + margin);
 }
 
+// Saturating "rubber band" response: maps a nonnegative overflow distance to
+// a compressed distance that grows almost 1:1 near zero and flattens out as
+// it approaches `capacity`, asymptotically never reaching it (e.g. an
+// overflow of `capacity` itself compresses to half of `capacity`). Used by
+// softenAxisToData() below so panning/zooming past a plot's data range meets
+// resistance that builds the further out you go, rather than either an
+// abrupt hard stop or unbounded drift into empty space.
+inline double rubberBand(double overflow, double capacity) {
+  if (capacity <= 0.0 || overflow <= 0.0) return 0.0;
+  return capacity * overflow / (overflow + capacity);
+}
+
+// Soft alternative to constrainAxisToData() above: instead of a hard wall
+// right at [lo, hi] plus a margin, panning/zooming is allowed to drift past
+// that boundary with rubberBand() resistance instead of stopping dead or
+// drifting unbounded -- a small nudge past the edge still moves close to
+// 1:1, but wandering further off flattens out.
+//
+// `zoom` is the same AxisZoomState already threaded through a plot for
+// wheel-zoom (see AxisZoomState/captureAxisZoomState()). ImPlot only
+// reports the outcome of this frame's pan/wheel/box-select/button zoom once
+// its own interaction handling runs, later in the frame -- too late to
+// react to here -- so, like the wheel-zoom capture/apply pair, this reads
+// back *last* frame's actual position (zoom.limits) and corrects at the top
+// of Setup: one frame behind the raw interaction. Holding a drag (or
+// mashing a zoom-out button) re-derives the correction fresh every frame,
+// which is what gives the resistance its live, springy feel rather than a
+// single after-the-fact snap-back. No-op before the first frame's position
+// has been captured (zoom.valid == false) or for a degenerate
+// (single-value) range. Call after SetupAxes(), before any Plot* call.
+inline void softenAxisToData(ImAxis axis, double lo, double hi, const AxisZoomState& zoom, double marginFrac = 0.1) {
+  if (!zoom.valid || !(hi > lo)) return;
+  double margin = (hi - lo) * marginFrac;
+  double softLo = lo - margin;
+  double softHi = hi + margin;
+  double capacity = hi - lo; // generous: up to about one more data-span's worth of drift
+  const ImPlotRange& last = (axis == ImAxis_X1) ? zoom.limits.X : zoom.limits.Y;
+  double newMin = last.Min;
+  double newMax = last.Max;
+  bool corrected = false;
+  if (last.Min < softLo) {
+    newMin = softLo - rubberBand(softLo - last.Min, capacity);
+    corrected = true;
+  }
+  if (last.Max > softHi) {
+    newMax = softHi + rubberBand(last.Max - softHi, capacity);
+    corrected = true;
+  }
+  if (corrected) ImPlot::SetupAxisLimits(axis, newMin, newMax, ImPlotCond_Always);
+}
+
 // Fits an axis to exactly [lo, hi] plus a margin, for use when "fitting" a
 // plot to its data. Unlike ImPlot's own SetNextAxesToFit(), which fits
 // flush with the curve touching the plot border, this leaves breathing
