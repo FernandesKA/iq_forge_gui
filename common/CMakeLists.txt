@@ -61,6 +61,7 @@ add_executable(iqforge
   gui/src/plot_waterfall.cpp
   gui/src/plot_phase.cpp
   gui/src/plot_instfreq.cpp
+  gui/src/plot_constellation.cpp
   ${IQFORGE_ICON_RC}
 )
 target_include_directories(iqforge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/gui/inc)

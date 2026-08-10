@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "measurements.h"
+#include "plot_constellation.h"
 #include "plot_format.h"
 #include "plot_instfreq.h"
 #include "plot_phase.h"
@@ -25,6 +26,7 @@ struct VisualizationTabState {
   bool showIQ = true;
   bool showPhase = true;
   bool showInstFreq = true;
+  bool showConstellation = false;
 
   SpectrumViewState spectrumView;
   WaterfallViewState waterfallView;
@@ -33,11 +35,14 @@ struct VisualizationTabState {
   // trigger controls) instead of each independently re-deriving it. They
   // also share one X-axis zoom/pan link and one sample-selection cursor, so
   // zooming or Ctrl+clicking a sample in any one of them is reflected in
-  // the other two.
+  // the other two. Constellation derives from the same triggered window too,
+  // but plots I against Q rather than against sample index, so it keeps its
+  // own fit/zoom state (ConstellationViewState) instead of joining that link.
   TriggerState trigger;
   TimeDomainViewState iqView;
   PhaseViewState phaseView;
   InstFreqViewState instFreqView;
+  ConstellationViewState constellationView;
   SharedXAxisLink timeDomainXLink;
   TimeMarkerState timeDomainMarkers;
   TimeRangeSelection timeDomainRangeSelection;
@@ -167,6 +172,8 @@ VisualizationRequest drawVisualizationWindow(const char* windowTitle, Visualizat
   ImGui::Checkbox("Phase", &tab.showPhase);
   sameLineOrWrap(wrapButtonWidth("Inst. freq"));
   ImGui::Checkbox("Inst. freq", &tab.showInstFreq);
+  sameLineOrWrap(wrapButtonWidth("Constellation"));
+  ImGui::Checkbox("Constellation", &tab.showConstellation);
   sameLineOrWrap(wrapButtonWidth("Freeze"));
   ImGui::Checkbox("Freeze", &frozen);
   if (frozen) {
@@ -197,7 +204,7 @@ VisualizationRequest drawVisualizationWindow(const char* windowTitle, Visualizat
     ImGui::PopID();
   }
 
-  if (tab.showIQ || tab.showPhase || tab.showInstFreq) {
+  if (tab.showIQ || tab.showPhase || tab.showInstFreq || tab.showConstellation) {
     ImGui::SeparatorText("Time domain");
     ImGui::PushID("timedomain");
     bool resetFromTrigger = drawTriggerControls(tab.trigger) || signalChanged;
@@ -225,6 +232,12 @@ VisualizationRequest drawVisualizationWindow(const char* windowTitle, Visualizat
       ImGui::PushID("instfreq");
       plotInstFreqLine("##instfreq", triggeredData, triggeredCount, sampleRateHz, tab.instFreqView, resetFromTrigger,
                         tab.timeDomainXLink, tab.timeDomainMarkers, tab.timeDomainRangeSelection);
+      ImGui::PopID();
+    }
+    if (tab.showConstellation) {
+      ImGui::Text("Constellation");
+      ImGui::PushID("constellation");
+      plotConstellation("##constellation", triggeredData, triggeredCount, tab.constellationView, resetFromTrigger);
       ImGui::PopID();
     }
     ImGui::PopID();
