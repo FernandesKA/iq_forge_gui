@@ -90,11 +90,13 @@ void drawTxControlContents(AppState& state) {
   bool connected = state.deviceManager.isConnected();
   bool active = state.isTxActive();
 
+  int prevSourceMode = state.txSourceMode;
   ImGui::BeginDisabled(active);
   ImGui::RadioButton("Signal generator", &state.txSourceMode, 0);
   ImGui::SameLine();
   ImGui::RadioButton("IQ file", &state.txSourceMode, 1);
   ImGui::EndDisabled();
+  if (state.txSourceMode != prevSourceMode) ++state.txSignalGeneration;
 
   if (state.txSourceMode == 0) {
     bool generatorChanged = clampGeneratorFrequencies(state.genConfig, state.sampleRateHz);
@@ -211,6 +213,7 @@ void drawTxControlContents(AppState& state) {
     if (generatorChanged) {
       state.genConfig.sampleRateHz = state.sampleRateHz;
       state.generator->setConfig(state.genConfig);
+      ++state.txSignalGeneration;
     }
   } else {
     ImGui::BeginDisabled(active);
@@ -290,6 +293,7 @@ void drawTxControlContents(AppState& state) {
         state.fileSource = std::make_shared<IQFileSource>(std::move(result.buffer), state.fileLoop);
         state.fileLoadedPath = state.filePathBuffer;
         state.fileLoadError.clear();
+        ++state.txSignalGeneration;
         state.log("Loaded IQ file: " + state.fileLoadedPath + " (" +
                    std::to_string(state.fileSource->totalSamples()) + " samples)");
       } else {

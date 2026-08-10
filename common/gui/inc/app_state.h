@@ -94,6 +94,13 @@ struct AppState {
   // back to the start.
   std::shared_ptr<IQFileSource> fileSource;
   std::string txError;
+  // Bumped whenever the TX signal itself changes discontinuously (generator
+  // config edited, source mode switched, a new file loaded) rather than just
+  // continuing to stream -- drawVisualizationWindow() diffs this against the
+  // last value it saw to force a plot re-fit, since otherwise a changed
+  // waveform/spectrum shape would sit inside whatever zoom/scale was left
+  // over from the previous signal.
+  int txSignalGeneration = 0;
   RingBuffer<SampleBuffer> txPreviewRing{8};
   std::vector<Sample> txTimeDomain;
   std::vector<float> txSpectrumDb;
@@ -212,6 +219,10 @@ struct AppState {
   // time if svResampleEnabled was on, so Save just writes svSource->data()
   // as-is with no separate resample step of its own.
   std::shared_ptr<IQFileSource> svSource;
+  // See txSignalGeneration above -- bumped on every successful file load so
+  // the plots re-fit to the newly loaded signal instead of keeping the
+  // previous file's zoom/scale.
+  int svSignalGeneration = 0;
   double svActiveRateHz = 0.0; // svSource's sample rate (post-resample); drives the spectrum/time-domain X axis
   double svCenterFreqHz = 0.0; // display reference only -- from SigMF capture freq if present, else 0; no device involved
   std::vector<Sample> svTimeDomain;

@@ -79,6 +79,7 @@ void drawSignalViewerControlContents(AppState& state) {
       state.svSource = std::make_shared<IQFileSource>(std::move(result.buffer), state.svLoop);
       state.svLoadedPath = state.svFilePathBuffer;
       state.svLoadError.clear();
+      ++state.svSignalGeneration;
       state.log("Signal Viewer: loaded " + state.svLoadedPath + " (" +
                  std::to_string(state.svSource->totalSamples()) + " samples)");
     } else {

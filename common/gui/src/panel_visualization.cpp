@@ -41,6 +41,10 @@ struct VisualizationTabState {
   SharedXAxisLink timeDomainXLink;
   TimeMarkerState timeDomainMarkers;
   TimeRangeSelection timeDomainRangeSelection;
+  // Last signalGeneration seen by drawVisualizationWindow(); -1 so the very
+  // first frame (generation starts at 0) also counts as "changed" and gets
+  // the initial fit for free, same as the hadData transition below.
+  int lastSignalGeneration = -1;
 };
 
 // Reported back to the caller (which owns AppState/the device) when a
@@ -141,8 +145,17 @@ VisualizationRequest drawVisualizationWindow(const char* windowTitle, Visualizat
                                               const std::vector<Sample>& timeDomain,
                                               const std::vector<float>& spectrumDb,
                                               const std::deque<WaterfallRow>& waterfallRows, double sampleRateHz,
-                                              double centerFreqHz, bool& frozen) {
+                                              double centerFreqHz, bool& frozen, int signalGeneration) {
   VisualizationRequest request;
+  // The signal itself (not just the sample window sliding forward) changed
+  // discontinuously since last frame -- e.g. a new file was loaded or the TX
+  // generator's config was edited -- so force every plot below to re-fit
+  // instead of keeping whatever zoom/scale was left over from the previous
+  // signal.
+  bool signalChanged = tab.lastSignalGeneration != signalGeneration;
+  tab.lastSignalGeneration = signalGeneration;
+  if (signalChanged) tab.spectrumView.hadData = false;
+
   ImGui::Begin(windowTitle);
 
   ImGui::Checkbox("Spectrum", &tab.showSpectrum);
@@ -187,7 +200,7 @@ VisualizationRequest drawVisualizationWindow(const char* windowTitle, Visualizat
   if (tab.showIQ || tab.showPhase || tab.showInstFreq) {
     ImGui::SeparatorText("Time domain");
     ImGui::PushID("timedomain");
-    bool resetFromTrigger = drawTriggerControls(tab.trigger);
+    bool resetFromTrigger = drawTriggerControls(tab.trigger) || signalChanged;
     auto [triggeredData, triggeredCount] = applyTrigger(timeDomain, tab.trigger);
 
     drawTimeMarkerControls(tab.timeDomainMarkers, triggeredData, triggeredCount, sampleRateHz);
@@ -240,15 +253,18 @@ void drawTxVisualizationPanel(AppState& state) {
   static VisualizationTabState tab;
   VisualizationRequest req =
       drawVisualizationWindow("TX", tab, state.txTimeDomain, state.txSpectrumDb, state.txWaterfallRows,
-                               state.sampleRateHz, state.centerFreqHz, state.txFrozen);
+                               state.sampleRateHz, state.centerFreqHz, state.txFrozen, state.txSignalGeneration);
   if (req.retuneRequested) applyCenterFreqRetune(state, req.retuneToHz);
 }
 
 void drawRxVisualizationPanel(AppState& state) {
   static VisualizationTabState tab;
   VisualizationRequest req =
+      // RX has no discrete "signal changed" event of its own (it's a live
+      // device stream) -- 0 is a constant, so this never forces a re-fit
+      // beyond the initial one already handled by the hadData transition.
       drawVisualizationWindow("RX", tab, state.rxTimeDomain, state.rxSpectrumDb, state.rxWaterfallRows,
-                               state.sampleRateHz, state.centerFreqHz, state.rxFrozen);
+                               state.sampleRateHz, state.centerFreqHz, state.rxFrozen, 0);
   if (req.retuneRequested) applyCenterFreqRetune(state, req.retuneToHz);
 }
 
@@ -256,7 +272,8 @@ void drawSignalViewerVisualizationPanel(AppState& state) {
   static VisualizationTabState tab;
   VisualizationRequest req =
       drawVisualizationWindow("Signal Viewer", tab, state.svTimeDomain, state.svSpectrumDb, state.svWaterfallRows,
-                               state.svActiveRateHz, state.svCenterFreqHz, state.svFrozen);
+                               state.svActiveRateHz, state.svCenterFreqHz, state.svFrozen,
+                               state.svSignalGeneration);
   // No device to retune -- this mode works without one -- so a marker's
   // "-> Center freq" just updates the display reference used for the axis.
   if (req.retuneRequested) state.svCenterFreqHz = req.retuneToHz;
