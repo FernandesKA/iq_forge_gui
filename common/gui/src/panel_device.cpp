@@ -2,7 +2,6 @@
 
 #include <imgui.h>
 
-#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -138,24 +137,36 @@ void drawDevicePanel(AppState& state) {
                            ? "Probes USB and the network (mDNS), like SDR++'s device list"
                            : "Lists HackRF units currently attached via USB");
 
-  // Grows with the result count so a handful of devices aren't squeezed into
-  // a tiny box, but caps out and becomes independently scrollable so a very
-  // long list (many PlutoSDRs on the network, several HackRF units, etc.)
-  // can't push the rest of the panel down indefinitely. Connect/Disconnect
-  // is drawn above this (see the comment at line 85), so it's never at risk
-  // of being pushed off-screen by a long scan result list.
+  // A dropdown rather than an always-expanded list: with several devices
+  // (multiple PlutoSDRs on the network, a handful of HackRF units, etc.) an
+  // inline list ate up panel space and made the results hard to scan, so
+  // it's collapsed behind a combo -- ImGui scrolls its popup on its own once
+  // it has more entries than fit, same effect as the old list's own
+  // scrolling but without permanently occupying that space.
   if (!state.scanResults.empty()) {
-    constexpr float kMaxVisibleRows = 12.0f;
-    float listHeight = ImGui::GetTextLineHeightWithSpacing() * std::min<float>(state.scanResults.size(), kMaxVisibleRows);
-    ImGui::BeginChild("ScanResults", ImVec2(0.0f, listHeight), ImGuiChildFlags_Border);
+    // Preview shows the description matching whatever's currently in the
+    // URI field, if any -- so the combo reflects Connect's actual target
+    // even after picking a result (or typing a URI by hand) rather than
+    // resetting to a generic label.
+    const char* preview = "Select a scanned device...";
     for (const auto& d : state.scanResults) {
-      ImGui::PushID(d.uri.c_str());
-      if (ImGui::Selectable(d.description.c_str())) {
-        std::snprintf(state.uriBuffer, sizeof(state.uriBuffer), "%s", d.uri.c_str());
+      if (d.uri == state.uriBuffer) {
+        preview = d.description.c_str();
+        break;
       }
-      ImGui::PopID();
     }
-    ImGui::EndChild();
+    if (ImGui::BeginCombo("Scan results", preview)) {
+      for (const auto& d : state.scanResults) {
+        ImGui::PushID(d.uri.c_str());
+        bool isSelected = d.uri == state.uriBuffer;
+        if (ImGui::Selectable(d.description.c_str(), isSelected)) {
+          std::snprintf(state.uriBuffer, sizeof(state.uriBuffer), "%s", d.uri.c_str());
+        }
+        if (isSelected) ImGui::SetItemDefaultFocus();
+        ImGui::PopID();
+      }
+      ImGui::EndCombo();
+    }
   }
   ImGui::EndDisabled();
 
