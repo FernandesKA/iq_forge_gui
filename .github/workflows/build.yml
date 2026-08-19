@@ -81,6 +81,84 @@ jobs:
           name: iqforge-appimage-${{ matrix.os }}
           path: dist-appimage/*.AppImage
 
+  # Отдельный self-hosted job (Debian 13.6, physical machine).
+  # ВАЖНО: намеренно НЕ запускается на pull_request — self-hosted раннер не
+  # эфемерный, и прогон произвольного PR-кода на нём (в т.ч. из форков)
+  # даёт исполнение кода на твоей реальной машине. Билдится только на push.
+  build-linux-selfhosted:
+    if: github.event_name == 'push'
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake pkg-config dpkg-dev wget \
+            libglfw3-dev libgl1-mesa-dev \
+            libiio-dev libhackrf-dev libfftw3-dev
+
+      - name: Determine package version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DIQFORGE_BUILD_TESTS=ON -DIQFORGE_PACKAGE_VERSION=${{ steps.version.outputs.value }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Create Debian package
+        run: cpack --config build/CPackConfig.cmake -G DEB
+
+      - name: Install AppImageTool
+        run: |
+          wget -O appimagetool-x86_64.AppImage https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+
+      - name: Create AppImage
+        run: |
+          mkdir -p dist-appimage
+          mkdir -p appimage-root/usr/bin
+          cp build/common/iqforge appimage-root/usr/bin/iqforge
+          mkdir -p appimage-root/usr/share/applications
+          mkdir -p appimage-root/usr/share/doc/iqforge
+          cp assets/iqforge.desktop appimage-root/usr/share/applications/iqforge.desktop
+          cp assets/iqforge.desktop appimage-root/iqforge.desktop
+          mkdir -p appimage-root/usr/share/icons/hicolor/256x256/apps
+          cp assets/iqforge.png appimage-root/usr/share/icons/hicolor/256x256/apps/iqforge.png
+          cp assets/iqforge.png appimage-root/iqforge.png
+          ln -s usr/bin/iqforge appimage-root/AppRun
+          cp README.md appimage-root/usr/share/doc/iqforge/README
+          ./appimagetool-x86_64.AppImage --appimage-extract-and-run appimage-root dist-appimage/iqforge.AppImage
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: iqforge-linux-debian-13.6-binary
+          path: build/common/iqforge
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: iqforge-deb-debian-13.6
+          path: ./*.deb
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: iqforge-appimage-debian-13.6
+          path: dist-appimage/*.AppImage
+
   build-windows:
     runs-on: windows-latest
     steps:
@@ -154,7 +232,7 @@ jobs:
           path: iqforge-*-win64.exe
 
   release:
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-linux-selfhosted, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -215,6 +293,25 @@ jobs:
           name: iqforge-appimage-ubuntu-latest
           path: linux-latest-appimage
 
+      # ---- Debian 13.6 (self-hosted) artifacts ----
+      - name: Download binary (Debian 13.6)
+        uses: actions/download-artifact@v4
+        with:
+          name: iqforge-linux-debian-13.6-binary
+          path: linux-debian-13.6
+
+      - name: Download Debian package (Debian 13.6)
+        uses: actions/download-artifact@v4
+        with:
+          name: iqforge-deb-debian-13.6
+          path: linux-debian-13.6-deb
+
+      - name: Download AppImage (Debian 13.6)
+        uses: actions/download-artifact@v4
+        with:
+          name: iqforge-appimage-debian-13.6
+          path: linux-debian-13.6-appimage
+
       # ---- Windows artifacts ----
       - name: Download Windows executable
         uses: actions/download-artifact@v4
@@ -236,6 +333,7 @@ jobs:
           cp linux-22.04/iqforge dist/iqforge-linux-22.04
           cp linux-24.04/iqforge dist/iqforge-linux-24.04
           cp linux-latest/iqforge dist/iqforge-linux-latest
+          cp linux-debian-13.6/iqforge dist/iqforge-linux-debian-13.6
 
           # Debian packages: rename to include OS version
           cd linux-22.04-deb
@@ -255,6 +353,13 @@ jobs:
           cd linux-latest-deb
           for f in *.deb; do
             mv "$f" "${f%.deb}-ubuntu-latest.deb"
+          done
+          cp *.deb ../dist/
+          cd ..
+
+          cd linux-debian-13.6-deb
+          for f in *.deb; do
+            mv "$f" "${f%.deb}-debian13.6.deb"
           done
           cp *.deb ../dist/
           cd ..
@@ -281,6 +386,13 @@ jobs:
           cp *.AppImage ../dist/
           cd ..
 
+          cd linux-debian-13.6-appimage
+          for f in *.AppImage; do
+            mv "$f" "${f%.AppImage}-debian13.6.AppImage"
+          done
+          cp *.AppImage ../dist/
+          cd ..
+
           # Windows: zip the executable with DLLs
           cd windows
           zip -r ../dist/iqforge-windows-x86_64.zip .
@@ -296,6 +408,7 @@ jobs:
             dist/iqforge-linux-22.04
             dist/iqforge-linux-24.04
             dist/iqforge-linux-latest
+            dist/iqforge-linux-debian-13.6
             dist/*.deb
             dist/*.AppImage
             dist/iqforge-windows-x86_64.zip
