@@ -59,6 +59,51 @@ void parseHostPort(const std::string& uri, std::string& hostOut, int& portOut) {
   if (hostOut.empty()) hostOut = "192.168.0.7"; // this project's usual bench IP
 }
 
+std::uint64_t doubleToBits(double d) {
+  std::uint64_t u;
+  std::memcpy(&u, &d, sizeof(u));
+  return u;
+}
+
+double bitsToDouble(std::uint64_t u) {
+  double d;
+  std::memcpy(&d, &u, sizeof(d));
+  return d;
+}
+
+void encode(const IqForgePacket& p, std::uint8_t out[kIqForgePacketSize]) {
+  out[0] = static_cast<std::uint8_t>(p.magic >> 24);
+  out[1] = static_cast<std::uint8_t>(p.magic >> 16);
+  out[2] = static_cast<std::uint8_t>(p.magic >> 8);
+  out[3] = static_cast<std::uint8_t>(p.magic);
+  out[4] = static_cast<std::uint8_t>(p.command >> 8);
+  out[5] = static_cast<std::uint8_t>(p.command);
+  out[6] = static_cast<std::uint8_t>(p.code >> 8);
+  out[7] = static_cast<std::uint8_t>(p.code);
+  out[8] = static_cast<std::uint8_t>(p.queryId >> 24);
+  out[9] = static_cast<std::uint8_t>(p.queryId >> 16);
+  out[10] = static_cast<std::uint8_t>(p.queryId >> 8);
+  out[11] = static_cast<std::uint8_t>(p.queryId);
+  for (int i = 0; i < 8; ++i) {
+    out[12 + i] = static_cast<std::uint8_t>(p.arg >> (56 - 8 * i));
+  }
+}
+
+IqForgePacket decode(const std::uint8_t in[kIqForgePacketSize]) {
+  IqForgePacket p;
+  p.magic = (static_cast<std::uint32_t>(in[0]) << 24) | (static_cast<std::uint32_t>(in[1]) << 16) |
+            (static_cast<std::uint32_t>(in[2]) << 8) | static_cast<std::uint32_t>(in[3]);
+  p.command = static_cast<std::uint16_t>((in[4] << 8) | in[5]);
+  p.code = static_cast<std::uint16_t>((in[6] << 8) | in[7]);
+  p.queryId = (static_cast<std::uint32_t>(in[8]) << 24) | (static_cast<std::uint32_t>(in[9]) << 16) |
+              (static_cast<std::uint32_t>(in[10]) << 8) | static_cast<std::uint32_t>(in[11]);
+  p.arg = 0;
+  for (int i = 0; i < 8; ++i) {
+    p.arg = (p.arg << 8) | in[12 + i];
+  }
+  return p;
+}
+
 } // namespace
 
 IqForgeDevice::IqForgeDevice() {
@@ -130,11 +175,11 @@ bool IqForgeDevice::open(const DeviceConfig& cfg, std::string& errorOut) {
 #endif
 
   socket_ = s;
-  recvBuf_.clear();
+  nextQueryId_ = 1;
 
-  std::string response;
-  if (!sendCommand("PING", response) || response.substr(0, 2) != "OK") {
-    errorOut = "Connected, but board did not respond to PING (wrong host/port or stale firmware?)";
+  IqForgePacket response;
+  if (!request(IqForgeCommand::Ping, 0, response) || response.code != static_cast<std::uint16_t>(IqForgeCode::Ack)) {
+    errorOut = "Connected, but board did not respond to ping (wrong host/port or stale firmware?)";
     close();
     return false;
   }
@@ -156,50 +201,62 @@ void IqForgeDevice::close() {
 }
 
 bool IqForgeDevice::checkAlive() {
-  std::string response;
-  return sendCommand("PING", response) && response.substr(0, 2) == "OK";
+  IqForgePacket response;
+  return request(IqForgeCommand::Ping, 0, response) && response.code == static_cast<std::uint16_t>(IqForgeCode::Ack);
 }
 
-bool IqForgeDevice::sendCommand(const std::string& line, std::string& responseOut) {
+bool IqForgeDevice::request(IqForgeCommand command, std::uint64_t arg, IqForgePacket& responseOut) {
   std::lock_guard<std::mutex> lock(ioMutex_);
   if (socket_ == kInvalidSocket) return false;
 
-  std::string toSend = line + "\n";
+  IqForgePacket req;
+  req.command = static_cast<std::uint16_t>(command);
+  req.queryId = nextQueryId_++;
+  req.arg = arg;
+
+  std::uint8_t outBuf[kIqForgePacketSize];
+  encode(req, outBuf);
+
+  std::size_t sent = 0;
+  while (sent < kIqForgePacketSize) {
 #if defined(_WIN32)
-  int sent = ::send(static_cast<SOCKET>(socket_), toSend.data(), static_cast<int>(toSend.size()), 0);
+    int n = ::send(static_cast<SOCKET>(socket_), reinterpret_cast<const char*>(outBuf) + sent,
+                    static_cast<int>(kIqForgePacketSize - sent), 0);
 #else
-  ssize_t sent = ::send(socket_, toSend.data(), toSend.size(), 0);
+    ssize_t n = ::send(socket_, outBuf + sent, kIqForgePacketSize - sent, 0);
 #endif
-  if (sent <= 0 || static_cast<size_t>(sent) != toSend.size()) {
-    return false;
+    if (n <= 0) return false;
+    sent += static_cast<std::size_t>(n);
   }
 
-  for (;;) {
-    auto pos = recvBuf_.find('\n');
-    if (pos != std::string::npos) {
-      responseOut = recvBuf_.substr(0, pos);
-      if (!responseOut.empty() && responseOut.back() == '\r') responseOut.pop_back();
-      recvBuf_.erase(0, pos + 1);
-      return true;
-    }
-
-    char chunk[256];
+  std::uint8_t inBuf[kIqForgePacketSize];
+  std::size_t have = 0;
+  while (have < kIqForgePacketSize) {
 #if defined(_WIN32)
-    int n = ::recv(static_cast<SOCKET>(socket_), chunk, sizeof(chunk), 0);
+    int n = ::recv(static_cast<SOCKET>(socket_), reinterpret_cast<char*>(inBuf) + have,
+                    static_cast<int>(kIqForgePacketSize - have), 0);
 #else
-    ssize_t n = ::recv(socket_, chunk, sizeof(chunk), 0);
+    ssize_t n = ::recv(socket_, inBuf + have, kIqForgePacketSize - have, 0);
 #endif
     if (n <= 0) return false; // disconnected, timed out, or error
-    recvBuf_.append(chunk, static_cast<size_t>(n));
+    have += static_cast<std::size_t>(n);
   }
+
+  IqForgePacket resp = decode(inBuf);
+  if (resp.magic != kIqForgeProtocolMagic || resp.queryId != req.queryId) {
+    return false; // desynced framing or stale/mismatched response -- treat as dead
+  }
+  responseOut = resp;
+  return true;
 }
 
 bool IqForgeDevice::startTx(std::shared_ptr<ISampleSource> /*source*/, std::string& errorOut) {
   // No IQ streaming for this device: the DDS runs entirely on-board. This
   // just enables it at whatever frequency setFrequency() last set.
-  std::string response;
-  if (!sendCommand("ENABLE", response) || response.substr(0, 2) != "OK") {
-    errorOut = response.empty() ? "Connection lost" : response;
+  IqForgePacket response;
+  if (!request(IqForgeCommand::Enable, 0, response) ||
+      response.code != static_cast<std::uint16_t>(IqForgeCode::Ack)) {
+    errorOut = "Board rejected DDS enable (code " + std::to_string(response.code) + ")";
     return false;
   }
   txRunning_.store(true);
@@ -207,8 +264,8 @@ bool IqForgeDevice::startTx(std::shared_ptr<ISampleSource> /*source*/, std::stri
 }
 
 void IqForgeDevice::stopTx() {
-  std::string response;
-  sendCommand("DISABLE", response);
+  IqForgePacket response;
+  request(IqForgeCommand::Disable, 0, response);
   txRunning_.store(false);
 }
 
@@ -218,9 +275,9 @@ bool IqForgeDevice::startRx(RxCallback /*callback*/, std::string& errorOut) {
 }
 
 bool IqForgeDevice::setFrequency(double hz) {
-  std::string cmd = "SET_FREQ " + std::to_string(hz);
-  std::string response;
-  return sendCommand(cmd, response) && response.substr(0, 2) == "OK";
+  IqForgePacket response;
+  return request(IqForgeCommand::SetFreq, doubleToBits(hz), response) &&
+         response.code == static_cast<std::uint16_t>(IqForgeCode::Ack);
 }
 
 bool IqForgeDevice::setSampleRate(double /*sps*/) { return false; }

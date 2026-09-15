@@ -9,14 +9,53 @@
 
 namespace iqforge {
 
+// Wire protocol for talking to iq_forge_fw's net::control_server, over
+// Ethernet (plain TCP, not serial). Fixed 20-byte packets both ways, all
+// multi-byte integers in network (big-endian) byte order -- mirrors
+// iq_forge_fw/project/inc/control_server.h; keep the two in sync by hand
+// (separate repos, no shared header).
+//
+//   offset  size  field
+//   0       4     magic     (kProtocolMagic, checked on every packet)
+//   4       2     command   (IqForgeCommand; request only, 0 in responses)
+//   6       2     code      (0 in requests; IqForgeCode in responses)
+//   8       4     query_id  (assigned per request here, echoed back by the board)
+//   12      8     arg       (command-specific, see IqForgeCommand)
+constexpr std::uint32_t kIqForgeProtocolMagic = 0x49514631; // "IQF1"
+constexpr std::size_t kIqForgePacketSize = 20;
+
+enum class IqForgeCommand : std::uint16_t {
+  Ping = 0,
+  SetFreq = 1,
+  GetFreq = 2,
+  Enable = 3,
+  Disable = 4,
+  GetEnabled = 5,
+};
+
+enum class IqForgeCode : std::uint16_t {
+  Ack = 0,
+  Nack = 1,
+  NackUnknownCommand = 2,
+  NackBadArg = 3,
+};
+
+struct IqForgePacket {
+  std::uint32_t magic = kIqForgeProtocolMagic;
+  std::uint16_t command = 0;
+  std::uint16_t code = 0;
+  std::uint32_t queryId = 0;
+  std::uint64_t arg = 0;
+};
+
 // Talks to this project's own board firmware (iq_forge_hdl + iq_forge_fw,
-// see control_server.h on that side) over a small line-based TCP protocol --
-// not libiio, not the HackRF protocol. Sine-only for now: there is no IQ
+// see control_server.h on that side) over the binary protocol above -- not
+// libiio, not the HackRF protocol. Sine-only for now: there is no IQ
 // streaming here, just the on-board DDS's frequency and enable/disable.
 // startTx()/stopTx() therefore ignore the given ISampleSource entirely --
 // they just enable/disable the DDS at whatever frequency setFrequency()
-// last set (typically the "Center freq" field, which the Device panel
-// already pushes via setFrequency() for every device kind).
+// last set (typically the "DDS freq" field, which the Device panel already
+// pushes via setFrequency() for every device kind).
 //
 // Unsupported for this device kind (setSampleRate/setBandwidth/setTxGain/
 // setRxGain/setRxGainMode, and RX entirely): return false so the GUI can
@@ -51,10 +90,11 @@ class IqForgeDevice : public IDevice {
   std::string name() const override { return "IqForge"; }
 
  private:
-  // Sends "<line>\n", reads back one "\n"-terminated response line (without
-  // the newline). Returns false on any socket error/disconnect/timeout, in
+  // Sends one request packet (command/arg filled in, magic/queryId set
+  // here) and waits for the matching response (same queryId). Returns
+  // false on any socket error/disconnect/timeout or a queryId mismatch, in
   // which case the connection is considered dead (see isOpen()/checkAlive()).
-  bool sendCommand(const std::string& line, std::string& responseOut);
+  bool request(IqForgeCommand command, std::uint64_t arg, IqForgePacket& responseOut);
 
 #if defined(_WIN32)
   using SocketHandle = std::uintptr_t; // SOCKET
@@ -65,8 +105,8 @@ class IqForgeDevice : public IDevice {
 #endif
 
   SocketHandle socket_ = kInvalidSocket;
-  std::mutex ioMutex_; // serializes sendCommand() -- one request in flight at a time
-  std::string recvBuf_;
+  std::mutex ioMutex_; // serializes request() -- one in flight at a time
+  std::uint32_t nextQueryId_ = 1;
   std::atomic<bool> txRunning_{false};
 };
 
