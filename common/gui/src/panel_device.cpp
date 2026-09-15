@@ -27,6 +27,7 @@ const char* kUriHint(DeviceKind kind) {
   switch (kind) {
     case DeviceKind::PlutoSDR: return "usb: | usb:1.5.5 | ip:192.168.2.1 | ip:pluto.local (empty = usb:)";
     case DeviceKind::HackRF: return "serial number (empty = first device found)";
+    case DeviceKind::IqForge: return "host[:port] of the board's iq_forge_app, e.g. 192.168.0.7 (port defaults to 7373)";
   }
   return "";
 }
@@ -53,6 +54,12 @@ void drawDevicePanel(AppState& state) {
     state.rxGainMode = RxGainMode::Manual; // no hardware AGC on HackRF
     state.txChannel = 0; // HackRF has only one TX chain
     state.rxChannel = 0; // HackRF has only one RX chain
+  }
+  ImGui::SameLine();
+  if (ImGui::RadioButton("IqForge", kind == 2) && kind != 2) {
+    state.selectedKind = DeviceKind::IqForge;
+    state.txChannel = 0;
+    state.rxChannel = 0;
   }
 
   ImGui::InputText("URI / Serial", state.uriBuffer, sizeof(state.uriBuffer));
@@ -127,98 +134,121 @@ void drawDevicePanel(AppState& state) {
 
   ImGui::Separator();
 
-  ImGui::BeginDisabled(connected);
-  if (ImGui::Button("Scan")) {
-    state.scanResults = state.selectedKind == DeviceKind::PlutoSDR ? scanPlutoDevices() : scanHackrfDevices();
-    state.log("Scan found " + std::to_string(state.scanResults.size()) + " device(s)");
-  }
-  ImGui::SameLine();
-  ImGui::TextDisabled(state.selectedKind == DeviceKind::PlutoSDR
-                           ? "Probes USB and the network (mDNS), like SDR++'s device list"
-                           : "Lists HackRF units currently attached via USB");
+  bool isIqForge = state.selectedKind == DeviceKind::IqForge;
 
-  // A dropdown rather than an always-expanded list: with several devices
-  // (multiple PlutoSDRs on the network, a handful of HackRF units, etc.) an
-  // inline list ate up panel space and made the results hard to scan, so
-  // it's collapsed behind a combo -- ImGui scrolls its popup on its own once
-  // it has more entries than fit, same effect as the old list's own
-  // scrolling but without permanently occupying that space.
-  if (!state.scanResults.empty()) {
-    // Preview shows the description matching whatever's currently in the
-    // URI field, if any -- so the combo reflects Connect's actual target
-    // even after picking a result (or typing a URI by hand) rather than
-    // resetting to a generic label.
-    const char* preview = "Select a scanned device...";
-    for (const auto& d : state.scanResults) {
-      if (d.uri == state.uriBuffer) {
-        preview = d.description.c_str();
-        break;
-      }
+  ImGui::BeginDisabled(connected);
+  if (!isIqForge) {
+    if (ImGui::Button("Scan")) {
+      state.scanResults = state.selectedKind == DeviceKind::PlutoSDR ? scanPlutoDevices() : scanHackrfDevices();
+      state.log("Scan found " + std::to_string(state.scanResults.size()) + " device(s)");
     }
-    if (ImGui::BeginCombo("Scan results", preview)) {
+    ImGui::SameLine();
+    ImGui::TextDisabled(state.selectedKind == DeviceKind::PlutoSDR
+                             ? "Probes USB and the network (mDNS), like SDR++'s device list"
+                             : "Lists HackRF units currently attached via USB");
+
+    // A dropdown rather than an always-expanded list: with several devices
+    // (multiple PlutoSDRs on the network, a handful of HackRF units, etc.) an
+    // inline list ate up panel space and made the results hard to scan, so
+    // it's collapsed behind a combo -- ImGui scrolls its popup on its own once
+    // it has more entries than fit, same effect as the old list's own
+    // scrolling but without permanently occupying that space.
+    if (!state.scanResults.empty()) {
+      // Preview shows the description matching whatever's currently in the
+      // URI field, if any -- so the combo reflects Connect's actual target
+      // even after picking a result (or typing a URI by hand) rather than
+      // resetting to a generic label.
+      const char* preview = "Select a scanned device...";
       for (const auto& d : state.scanResults) {
-        ImGui::PushID(d.uri.c_str());
-        bool isSelected = d.uri == state.uriBuffer;
-        if (ImGui::Selectable(d.description.c_str(), isSelected)) {
-          std::snprintf(state.uriBuffer, sizeof(state.uriBuffer), "%s", d.uri.c_str());
+        if (d.uri == state.uriBuffer) {
+          preview = d.description.c_str();
+          break;
         }
-        if (isSelected) ImGui::SetItemDefaultFocus();
-        ImGui::PopID();
       }
-      ImGui::EndCombo();
+      if (ImGui::BeginCombo("Scan results", preview)) {
+        for (const auto& d : state.scanResults) {
+          ImGui::PushID(d.uri.c_str());
+          bool isSelected = d.uri == state.uriBuffer;
+          if (ImGui::Selectable(d.description.c_str(), isSelected)) {
+            std::snprintf(state.uriBuffer, sizeof(state.uriBuffer), "%s", d.uri.c_str());
+          }
+          if (isSelected) ImGui::SetItemDefaultFocus();
+          ImGui::PopID();
+        }
+        ImGui::EndCombo();
+      }
     }
+  } else {
+    ImGui::TextDisabled("No scan for IqForge yet -- type the board's IP above");
   }
   ImGui::EndDisabled();
 
   ImGui::Separator();
 
   bool changed = false;
-  changed |= FrequencyInputHz("Sample rate", &state.sampleRateHz, &state.sampleRateUnit);
-  changed |= FrequencyInputHz("Center freq", &state.centerFreqHz, &state.centerFreqUnit);
-  changed |= FrequencyInputHz("Bandwidth", &state.bandwidthHz, &state.bandwidthUnit);
-
-  bool txGainChanged = ImGui::SliderScalar(
-      state.selectedKind == DeviceKind::HackRF ? "TX VGA gain (dB)" : "TX attenuation (dB)",
-      ImGuiDataType_Double, &state.txGainDb,
-      state.selectedKind == DeviceKind::HackRF ? &kZero : &kMinAtten,
-      state.selectedKind == DeviceKind::HackRF ? &kHackrfTxMax : &kZero, "%.2f");
-
-  // HackRF has no hardware AGC (see hackrf_device.h), so the mode picker
-  // only makes sense for PlutoSDR -- HackRF stays permanently Manual.
-  bool gainModeChanged = false;
-  if (state.selectedKind == DeviceKind::PlutoSDR) {
-    if (ImGui::RadioButton("Manual##rxgainmode", state.rxGainMode == RxGainMode::Manual)) {
-      state.rxGainMode = RxGainMode::Manual;
-      gainModeChanged = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("AGC slow", state.rxGainMode == RxGainMode::AgcSlow)) {
-      state.rxGainMode = RxGainMode::AgcSlow;
-      gainModeChanged = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("AGC fast", state.rxGainMode == RxGainMode::AgcFast)) {
-      state.rxGainMode = RxGainMode::AgcFast;
-      gainModeChanged = true;
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("RX gain mode");
+  if (!isIqForge) {
+    changed |= FrequencyInputHz("Sample rate", &state.sampleRateHz, &state.sampleRateUnit);
+  }
+  // For IqForge this is the DDS's own output frequency (there's no separate
+  // LO -- see iq_forge_device.h), pushed via the same setFrequency() call as
+  // any other device kind below.
+  changed |= FrequencyInputHz(isIqForge ? "DDS freq" : "Center freq", &state.centerFreqHz, &state.centerFreqUnit);
+  if (!isIqForge) {
+    changed |= FrequencyInputHz("Bandwidth", &state.bandwidthHz, &state.bandwidthUnit);
   }
 
-  // Gain is driven by the AD9361 itself under either AGC mode -- the slider
-  // would just be misleading (and, per setRxGain(), any drag on it while
-  // AGC is active gets silently ignored by the device anyway).
-  ImGui::BeginDisabled(state.selectedKind == DeviceKind::PlutoSDR && state.rxGainMode != RxGainMode::Manual);
-  bool rxGainChanged = ImGui::SliderScalar(
-      "RX gain (dB)", ImGuiDataType_Double, &state.rxGainDb, &kZero,
-      state.selectedKind == DeviceKind::HackRF ? &kHackrfRxMax : &kPlutoRxMax, "%.2f");
-  ImGui::EndDisabled();
+  bool txGainChanged = false;
+  bool gainModeChanged = false;
+  bool rxGainChanged = false;
+  if (!isIqForge) {
+    txGainChanged = ImGui::SliderScalar(
+        state.selectedKind == DeviceKind::HackRF ? "TX VGA gain (dB)" : "TX attenuation (dB)",
+        ImGuiDataType_Double, &state.txGainDb,
+        state.selectedKind == DeviceKind::HackRF ? &kZero : &kMinAtten,
+        state.selectedKind == DeviceKind::HackRF ? &kHackrfTxMax : &kZero, "%.2f");
+
+    // HackRF has no hardware AGC (see hackrf_device.h), so the mode picker
+    // only makes sense for PlutoSDR -- HackRF stays permanently Manual.
+    if (state.selectedKind == DeviceKind::PlutoSDR) {
+      if (ImGui::RadioButton("Manual##rxgainmode", state.rxGainMode == RxGainMode::Manual)) {
+        state.rxGainMode = RxGainMode::Manual;
+        gainModeChanged = true;
+      }
+      ImGui::SameLine();
+      if (ImGui::RadioButton("AGC slow", state.rxGainMode == RxGainMode::AgcSlow)) {
+        state.rxGainMode = RxGainMode::AgcSlow;
+        gainModeChanged = true;
+      }
+      ImGui::SameLine();
+      if (ImGui::RadioButton("AGC fast", state.rxGainMode == RxGainMode::AgcFast)) {
+        state.rxGainMode = RxGainMode::AgcFast;
+        gainModeChanged = true;
+      }
+      ImGui::SameLine();
+      ImGui::TextDisabled("RX gain mode");
+    }
+
+    // Gain is driven by the AD9361 itself under either AGC mode -- the slider
+    // would just be misleading (and, per setRxGain(), any drag on it while
+    // AGC is active gets silently ignored by the device anyway).
+    ImGui::BeginDisabled(state.selectedKind == DeviceKind::PlutoSDR && state.rxGainMode != RxGainMode::Manual);
+    rxGainChanged = ImGui::SliderScalar(
+        "RX gain (dB)", ImGuiDataType_Double, &state.rxGainDb, &kZero,
+        state.selectedKind == DeviceKind::HackRF ? &kHackrfRxMax : &kPlutoRxMax, "%.2f");
+    ImGui::EndDisabled();
+  } else {
+    ImGui::TextDisabled("IqForge: sine-only DDS TX for now -- no RX, no gain controls yet");
+  }
 
   if (connected && changed) {
     IDevice* dev = state.deviceManager.device();
-    if (!dev->setSampleRate(state.sampleRateHz)) state.log("Sample rate rejected by device");
-    if (!dev->setFrequency(state.centerFreqHz)) state.log("Center frequency rejected by device");
-    if (!dev->setBandwidth(state.bandwidthHz)) state.log("Bandwidth rejected by device");
+    if (!isIqForge) {
+      if (!dev->setSampleRate(state.sampleRateHz)) state.log("Sample rate rejected by device");
+    }
+    if (!dev->setFrequency(state.centerFreqHz)) state.log("Frequency rejected by device");
+    if (!isIqForge) {
+      if (!dev->setBandwidth(state.bandwidthHz)) state.log("Bandwidth rejected by device");
+    }
   }
   if (connected && txGainChanged) state.deviceManager.device()->setTxGain(state.txGainDb);
   if (connected && gainModeChanged) {

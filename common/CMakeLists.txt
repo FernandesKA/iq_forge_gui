@@ -6,6 +6,7 @@ add_library(iqforge_core STATIC
   dsp/src/async_iq_load.cpp
   devices/src/pluto_device.cpp
   devices/src/hackrf_device.cpp
+  devices/src/iq_forge_device.cpp
   devices/src/device_manager.cpp
   devices/src/device_scanner.cpp
 )
@@ -24,6 +25,10 @@ target_link_libraries(iqforge_core PUBLIC
   samplerate
   nlohmann_json::nlohmann_json
 )
+if(WIN32)
+  # IqForgeDevice (devices/src/iq_forge_device.cpp) uses winsock2 directly.
+  target_link_libraries(iqforge_core PUBLIC ws2_32)
+endif()
 
 if(WIN32)
   set(IQFORGE_ICON_PATH "${PROJECT_SOURCE_DIR}/assets/iqforge.ico")

@@ -105,10 +105,17 @@ TimeUnit timeUnitFromName(const std::string& s, TimeUnit fallback) {
   return fallback;
 }
 
-const char* deviceKindName(DeviceKind k) { return k == DeviceKind::HackRF ? "HackRF" : "PlutoSDR"; }
+const char* deviceKindName(DeviceKind k) {
+  switch (k) {
+    case DeviceKind::HackRF: return "HackRF";
+    case DeviceKind::IqForge: return "IqForge";
+    case DeviceKind::PlutoSDR: default: return "PlutoSDR";
+  }
+}
 DeviceKind deviceKindFromName(const std::string& s, DeviceKind fallback) {
   if (s == "HackRF") return DeviceKind::HackRF;
   if (s == "PlutoSDR") return DeviceKind::PlutoSDR;
+  if (s == "IqForge") return DeviceKind::IqForge;
   return fallback;
 }
 

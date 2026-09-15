@@ -8,7 +8,11 @@
 
 namespace iqforge {
 
-enum class DeviceKind { PlutoSDR, HackRF };
+// IqForge: this project's own rk7020f/pluto_sky boards (iq_forge_hdl +
+// iq_forge_fw), talked to over TCP -- not libiio, not the HackRF protocol.
+// Sine-only for now: no IQ streaming, just the on-board DDS's frequency and
+// enable/disable (see iq_forge_device.h).
+enum class DeviceKind { PlutoSDR, HackRF, IqForge };
 
 // AD9361 (PlutoSDR) RX gain control mode. AgcSlow/AgcFast map to the
 // AD9361's "slow_attack"/"fast_attack" gain_control_mode values -- slow is
@@ -24,6 +28,8 @@ struct DeviceConfig {
   // PlutoSDR: libiio context URI, e.g. "usb:" (first found), "usb:1.5.5",
   // "ip:192.168.2.1", "ip:pluto.local". Empty = auto ("usb:" then "ip:pluto.local").
   // HackRF: device serial number, empty = first device found.
+  // IqForge: "host[:port]" of the board's iq_forge_app control server, e.g.
+  // "192.168.0.7" (port defaults to 7373, see iq_forge_device.h).
   std::string uri;
 
   // 3 MSPS default: safely inside the AD9361's standard-firmware range

@@ -90,6 +90,14 @@ void drawTxControlContents(AppState& state) {
   bool connected = state.deviceManager.isConnected();
   bool active = state.isTxActive();
 
+  if (connected && state.selectedKind == DeviceKind::IqForge) {
+    ImGui::TextDisabled(
+        "IqForge: sine-only for now -- the generator/file below is ignored, "
+        "Start TX just enables the board's own DDS at the Device panel's "
+        "\"DDS freq\".");
+    ImGui::Separator();
+  }
+
   int prevSourceMode = state.txSourceMode;
   ImGui::BeginDisabled(active);
   ImGui::RadioButton("Signal generator", &state.txSourceMode, 0);

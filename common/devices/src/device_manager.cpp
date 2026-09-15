@@ -1,6 +1,7 @@
 #include "device_manager.h"
 
 #include "hackrf_device.h"
+#include "iq_forge_device.h"
 #include "pluto_device.h"
 
 namespace iqforge {
@@ -9,6 +10,7 @@ std::unique_ptr<IDevice> createDevice(DeviceKind kind) {
   switch (kind) {
     case DeviceKind::PlutoSDR: return std::make_unique<PlutoDevice>();
     case DeviceKind::HackRF: return std::make_unique<HackRFDevice>();
+    case DeviceKind::IqForge: return std::make_unique<IqForgeDevice>();
   }
   return nullptr;
 }
