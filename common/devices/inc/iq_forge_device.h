@@ -53,9 +53,8 @@ struct IqForgePacket {
 // libiio, not the HackRF protocol. Sine-only for now: there is no IQ
 // streaming here, just the on-board DDS's frequency and enable/disable.
 // startTx()/stopTx() therefore ignore the given ISampleSource entirely --
-// they just enable/disable the DDS at whatever frequency setFrequency()
-// last set (typically the "DDS freq" field, which the Device panel already
-// pushes via setFrequency() for every device kind).
+// they just enable/disable the DDS at whatever frequency setTxFrequency()
+// last set (the TX panel's "DDS freq" field for this device kind).
 //
 // Unsupported for this device kind (setSampleRate/setBandwidth/setTxGain/
 // setRxGain/setRxGainMode, and RX entirely): return false so the GUI can
@@ -80,7 +79,10 @@ class IqForgeDevice : public IDevice {
   void stopRx() override {}
   bool isRxRunning() const override { return false; }
 
-  bool setFrequency(double hz) override;
+  // Sine-only DDS TX, no RX hardware at all -- setRxFrequency is always
+  // rejected (returns false), matching setSampleRate/setBandwidth/etc. below.
+  bool setRxFrequency(double hz) override;
+  bool setTxFrequency(double hz) override;
   bool setSampleRate(double sps) override;
   bool setBandwidth(double hz) override;
   bool setTxGain(double db) override;

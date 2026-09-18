@@ -28,11 +28,11 @@ void glfwErrorCallback(int error, const char* description) {
 
 // Builds the default docked layout on first run: Device and the single
 // merged Control panel (panel_control.cpp -- its content follows whichever
-// of TX/RX/Signal Viewer is the active main-area tab, so there's nothing
-// further to tab-switch here) stacked in the left column, plots tabbed
-// together in the main area, Log/Settings tabbed together along the bottom.
-// Only runs once — after that the user's own arrangement (persisted in
-// imgui.ini) takes over.
+// of TX/RX/Signal Viewer/SpectrumViewer the user last focused, so there's
+// nothing further to tab-switch here) stacked in the left column, plots
+// tabbed together in the main area, Log/Settings tabbed together along the
+// bottom. Only runs once — after that the user's own arrangement (persisted
+// in imgui.ini) takes over.
 void buildDefaultLayout(ImGuiID dockspaceId) {
   ImGui::DockBuilderRemoveNode(dockspaceId);
   ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);

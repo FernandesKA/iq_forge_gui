@@ -171,7 +171,7 @@ void AppState::startSweep() {
   sweepSpectrumDb.assign(std::max<size_t>(numSteps, 1) * static_cast<size_t>(nBins), -160.0f);
 
   sweepCurrentCenterHz = lo + sweepStepHz / 2.0;
-  dev->setFrequency(sweepCurrentCenterHz);
+  dev->setRxFrequency(sweepCurrentCenterHz);
   rxFft.resetAveraging();
 
   // Only take over RX if it wasn't already running -- so Stop sweep later
@@ -226,7 +226,7 @@ void AppState::updateSweep() {
     nextCenterHz = sweepRangeStartHz + sweepStepHz / 2.0;
   }
   sweepCurrentCenterHz = nextCenterHz;
-  deviceManager.device()->setFrequency(sweepCurrentCenterHz);
+  deviceManager.device()->setRxFrequency(sweepCurrentCenterHz);
   rxFft.resetAveraging();
   sweepRetuneDeadline =
       now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(kSweepSettleSec));

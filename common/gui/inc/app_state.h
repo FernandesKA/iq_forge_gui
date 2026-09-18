@@ -36,11 +36,20 @@ struct AppState {
   DeviceKind selectedKind = DeviceKind::PlutoSDR;
   char uriBuffer[256] = "";
   double sampleRateHz = 3e6; // PlutoSDR's standard firmware rejects rates below ~2.083 MSPS
-  double centerFreqHz = 915e6;
   double bandwidthHz = 2e6;
   FreqUnit sampleRateUnit = FreqUnit::MHz;
-  FreqUnit centerFreqUnit = FreqUnit::MHz;
   FreqUnit bandwidthUnit = FreqUnit::MHz;
+
+  // RX/TX center frequency, edited in their respective panels rather than
+  // here (see panel_rx.cpp/panel_tx.cpp) since PlutoSDR's independent RX/TX
+  // LOs mean they can genuinely differ -- HackRF has only one physical LO
+  // shared between RX/TX, so its backend keeps these two in lockstep
+  // whichever one is set (see hackrf_device.cpp); IqForge has no RX at all,
+  // so only txCenterFreqHz (its "DDS freq") is meaningful for it.
+  double rxCenterFreqHz = 915e6;
+  double txCenterFreqHz = 915e6;
+  FreqUnit rxCenterFreqUnit = FreqUnit::MHz;
+  FreqUnit txCenterFreqUnit = FreqUnit::MHz;
   double txGainDb = -89.75; // maximum PlutoSDR TX attenuation (safest startup level)
   double rxGainDb = 0.0;    // minimum RX gain
   RxGainMode rxGainMode = RxGainMode::AgcSlow; // PlutoSDR only -- HackRF has no AGC, always Manual there
@@ -253,6 +262,16 @@ struct AppState {
   bool showRxTab = true;
   bool showSignalViewerTab = true;
   bool showSpectrumViewerTab = false;
+
+  // Which of TX/RX/Signal Viewer/SpectrumViewer the single shared "Control"
+  // panel (panel_control.cpp) currently shows -- updated whenever the user
+  // focuses one of those windows, and left alone otherwise (e.g. while
+  // interacting with a widget inside Control itself, which isn't one of the
+  // tracked windows) so it doesn't reset to a fixed default mid-edit. This
+  // is what lets Control follow the right window even when TX/RX have been
+  // dragged apart into separate dock nodes instead of tabbed together.
+  enum class MainDockTab { Tx, Rx, SignalViewer, SpectrumViewer };
+  MainDockTab lastActiveMainTab = MainDockTab::Tx;
 
   // --- Log ---
   struct LogEntry {

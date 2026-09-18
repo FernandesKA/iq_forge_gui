@@ -247,17 +247,26 @@ VisualizationRequest drawVisualizationWindow(const char* windowTitle, Visualizat
   return request;
 }
 
-// Applies a spectrum marker's "-> Center freq" request: retunes the shared
-// device state and, if a device is connected, the hardware itself -- same
-// pattern panel_device.cpp uses when its own frequency field changes.
-void applyCenterFreqRetune(AppState& state, double hz) {
-  state.centerFreqHz = hz;
+// Applies a spectrum marker's "-> Center freq" request: retunes the given
+// direction's device state and, if a device is connected, the hardware
+// itself -- same pattern panel_rx.cpp/panel_tx.cpp use when their own
+// frequency field changes. isTx picks which of the two independent (on
+// PlutoSDR) LOs to retune; on other device kinds there's really only one
+// physical LO, so the other direction's field is mirrored to match.
+void applyCenterFreqRetune(AppState& state, double hz, bool isTx) {
+  (isTx ? state.txCenterFreqHz : state.rxCenterFreqHz) = hz;
   IDevice* dev = state.deviceManager.device();
-  if (!dev) return;
-  if (!dev->setFrequency(hz)) {
-    state.log("Marker -> center freq: rejected by device");
-  } else {
-    state.log("Marker -> center freq: tuned to " + formatHz(hz));
+  const char* label = isTx ? "TX marker -> center freq" : "RX marker -> center freq";
+  if (dev) {
+    bool ok = isTx ? dev->setTxFrequency(hz) : dev->setRxFrequency(hz);
+    if (!ok) {
+      state.log(std::string(label) + ": rejected by device");
+    } else {
+      state.log(std::string(label) + ": tuned to " + formatHz(hz));
+    }
+  }
+  if (state.selectedKind != DeviceKind::PlutoSDR) {
+    (isTx ? state.rxCenterFreqHz : state.txCenterFreqHz) = hz;
   }
 }
 } // namespace
@@ -266,8 +275,8 @@ void drawTxVisualizationPanel(AppState& state) {
   static VisualizationTabState tab;
   VisualizationRequest req =
       drawVisualizationWindow("TX", tab, state.txTimeDomain, state.txSpectrumDb, state.txWaterfallRows,
-                               state.sampleRateHz, state.centerFreqHz, state.txFrozen, state.txSignalGeneration);
-  if (req.retuneRequested) applyCenterFreqRetune(state, req.retuneToHz);
+                               state.sampleRateHz, state.txCenterFreqHz, state.txFrozen, state.txSignalGeneration);
+  if (req.retuneRequested) applyCenterFreqRetune(state, req.retuneToHz, /*isTx=*/true);
 }
 
 void drawRxVisualizationPanel(AppState& state) {
@@ -277,8 +286,8 @@ void drawRxVisualizationPanel(AppState& state) {
       // device stream) -- 0 is a constant, so this never forces a re-fit
       // beyond the initial one already handled by the hadData transition.
       drawVisualizationWindow("RX", tab, state.rxTimeDomain, state.rxSpectrumDb, state.rxWaterfallRows,
-                               state.sampleRateHz, state.centerFreqHz, state.rxFrozen, 0);
-  if (req.retuneRequested) applyCenterFreqRetune(state, req.retuneToHz);
+                               state.sampleRateHz, state.rxCenterFreqHz, state.rxFrozen, 0);
+  if (req.retuneRequested) applyCenterFreqRetune(state, req.retuneToHz, /*isTx=*/false);
 }
 
 void drawSignalViewerVisualizationPanel(AppState& state) {

@@ -103,7 +103,8 @@ void drawDevicePanel(AppState& state) {
       cfg.kind = state.selectedKind;
       cfg.uri = state.uriBuffer;
       cfg.sampleRateHz = state.sampleRateHz;
-      cfg.centerFreqHz = state.centerFreqHz;
+      cfg.rxCenterFreqHz = state.rxCenterFreqHz;
+      cfg.txCenterFreqHz = state.txCenterFreqHz;
       cfg.bandwidthHz = state.bandwidthHz;
       cfg.txGainDb = state.txGainDb;
       cfg.rxGainDb = state.rxGainDb;
@@ -185,14 +186,13 @@ void drawDevicePanel(AppState& state) {
 
   ImGui::Separator();
 
+  // RX/TX center frequency now lives in the RX/TX panels instead of here --
+  // see panel_rx.cpp/panel_tx.cpp -- since they can genuinely differ on
+  // PlutoSDR (independent RX/TX LOs).
   bool changed = false;
   if (!isIqForge) {
     changed |= FrequencyInputHz("Sample rate", &state.sampleRateHz, &state.sampleRateUnit);
   }
-  // For IqForge this is the DDS's own output frequency (there's no separate
-  // LO -- see iq_forge_device.h), pushed via the same setFrequency() call as
-  // any other device kind below.
-  changed |= FrequencyInputHz(isIqForge ? "DDS freq" : "Center freq", &state.centerFreqHz, &state.centerFreqUnit);
   if (!isIqForge) {
     changed |= FrequencyInputHz("Bandwidth", &state.bandwidthHz, &state.bandwidthUnit);
   }
@@ -244,9 +244,6 @@ void drawDevicePanel(AppState& state) {
     IDevice* dev = state.deviceManager.device();
     if (!isIqForge) {
       if (!dev->setSampleRate(state.sampleRateHz)) state.log("Sample rate rejected by device");
-    }
-    if (!dev->setFrequency(state.centerFreqHz)) state.log("Frequency rejected by device");
-    if (!isIqForge) {
       if (!dev->setBandwidth(state.bandwidthHz)) state.log("Bandwidth rejected by device");
     }
   }

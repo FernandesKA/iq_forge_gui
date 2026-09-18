@@ -5,10 +5,10 @@
 
 namespace iqforge {
 
-bool isTabActive(const char* windowName) {
+bool isWindowFocused(const char* windowName) {
   ImGuiWindow* window = ImGui::FindWindowByName(windowName);
-  if (!window || !window->DockNode) return false;
-  return window->DockNode->SelectedTabId == window->TabId;
+  if (!window) return false;
+  return GImGui->NavWindow == window;
 }
 
 } // namespace iqforge

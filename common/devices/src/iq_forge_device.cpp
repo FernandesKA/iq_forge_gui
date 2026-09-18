@@ -185,9 +185,9 @@ bool IqForgeDevice::open(const DeviceConfig& cfg, std::string& errorOut) {
   }
 
   // Push the initial center frequency immediately, same as PlutoDevice/
-  // HackRFDevice do during open() -- the Device panel doesn't otherwise
-  // call setFrequency() until it changes after connecting.
-  setFrequency(cfg.centerFreqHz);
+  // HackRFDevice do during open() -- the TX panel doesn't otherwise call
+  // setTxFrequency() until it changes after connecting.
+  setTxFrequency(cfg.txCenterFreqHz);
 
   return true;
 }
@@ -274,7 +274,9 @@ bool IqForgeDevice::startRx(RxCallback /*callback*/, std::string& errorOut) {
   return false;
 }
 
-bool IqForgeDevice::setFrequency(double hz) {
+bool IqForgeDevice::setRxFrequency(double /*hz*/) { return false; }
+
+bool IqForgeDevice::setTxFrequency(double hz) {
   IqForgePacket response;
   return request(IqForgeCommand::SetFreq, doubleToBits(hz), response) &&
          response.code == static_cast<std::uint16_t>(IqForgeCode::Ack);

@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include "freq_input.h"
 #include "i_device.h"
 #include "iq_file.h"
 
@@ -51,8 +52,8 @@ void drawAnnotationControls(AppState& state) {
 // Builds the SigMF metadata for the recording currently in rxRecordBuffer,
 // capturing the device parameters/annotations as they are right now (i.e.
 // at Save & clear time -- if the user retuned mid-recording, only the final
-// values are reflected, same simplification as the rest of the app's
-// single shared sampleRateHz/centerFreqHz).
+// values are reflected, same simplification as the rest of the app's single
+// shared sampleRateHz).
 SigmfMeta buildSigmfMeta(const AppState& state) {
   SigmfMeta meta;
   meta.sampleRateHz = state.sampleRateHz;
@@ -63,7 +64,7 @@ SigmfMeta buildSigmfMeta(const AppState& state) {
 
   SigmfCapture cap;
   cap.sampleStart = 0;
-  cap.frequencyHz = state.centerFreqHz;
+  cap.frequencyHz = state.rxCenterFreqHz;
   cap.hasFrequency = true;
   cap.datetime = isoTimestampNowUtc();
   meta.captures.push_back(cap);
@@ -82,6 +83,23 @@ SigmfMeta buildSigmfMeta(const AppState& state) {
 void drawRxControlContents(AppState& state) {
   bool connected = state.deviceManager.isConnected();
   bool active = state.isRxActive();
+  bool isIqForge = state.selectedKind == DeviceKind::IqForge;
+
+  if (!isIqForge) {
+    // PlutoSDR has an independent RX LO, so this can genuinely differ from
+    // the TX panel's frequency; HackRF has only one physical LO shared
+    // between RX/TX, so its backend (see hackrf_device.cpp) keeps both in
+    // lockstep regardless of which one is set here.
+    if (FrequencyInputHz("RX center freq", &state.rxCenterFreqHz, &state.rxCenterFreqUnit)) {
+      if (connected && !state.deviceManager.device()->setRxFrequency(state.rxCenterFreqHz)) {
+        state.log("RX frequency rejected by device");
+      }
+      if (state.selectedKind != DeviceKind::PlutoSDR) state.txCenterFreqHz = state.rxCenterFreqHz;
+    }
+    ImGui::Separator();
+  } else {
+    ImGui::TextDisabled("IqForge: no RX support yet");
+  }
 
   ImGui::BeginDisabled(!connected);
   if (!active) {

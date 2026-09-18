@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "app_settings.h"
@@ -29,8 +30,12 @@ void fillDistinctive(AppState& s) {
   std::snprintf(s.uriBuffer, sizeof(s.uriBuffer), "usb:1.2.3");
   s.sampleRateHz = 5.5e6;
   s.sampleRateUnit = FreqUnit::kHz;
-  s.centerFreqHz = 433.92e6;
-  s.centerFreqUnit = FreqUnit::GHz;
+  // Distinct RX vs TX values -- this is exactly the independent RX/TX
+  // frequency support being round-tripped, so they must not collapse to one.
+  s.rxCenterFreqHz = 433.92e6;
+  s.rxCenterFreqUnit = FreqUnit::GHz;
+  s.txCenterFreqHz = 144.39e6;
+  s.txCenterFreqUnit = FreqUnit::MHz;
   s.bandwidthHz = 1.2e6;
   s.bandwidthUnit = FreqUnit::Hz;
   s.txGainDb = -12.5;
@@ -79,8 +84,10 @@ void checkMatchesDistinctive(const AppState& s) {
   CHECK(std::string(s.uriBuffer) == "usb:1.2.3");
   CHECK(s.sampleRateHz == 5.5e6);
   CHECK(s.sampleRateUnit == FreqUnit::kHz);
-  CHECK(s.centerFreqHz == 433.92e6);
-  CHECK(s.centerFreqUnit == FreqUnit::GHz);
+  CHECK(s.rxCenterFreqHz == 433.92e6);
+  CHECK(s.rxCenterFreqUnit == FreqUnit::GHz);
+  CHECK(s.txCenterFreqHz == 144.39e6);
+  CHECK(s.txCenterFreqUnit == FreqUnit::MHz);
   CHECK(s.bandwidthHz == 1.2e6);
   CHECK(s.bandwidthUnit == FreqUnit::Hz);
   CHECK(s.txGainDb == -12.5);
@@ -183,6 +190,25 @@ void run_app_settings_tests() {
 
     AppState dst2;
     CHECK(loadSessionSettings(dst2) == false);
+  }
+
+  // Loading a pre-existing settings.json written before independent RX/TX
+  // frequencies existed (only the old shared "centerFreqHz"/"centerFreqUnit"
+  // keys, no "rxCenterFreqHz"/"txCenterFreqHz") must apply that one value to
+  // both directions rather than silently resetting either to the default.
+  {
+    fs::remove_all(kTestConfigDir + std::string("/session.json"), ec);
+    saveAutoSaveEnabled(true);
+    std::ofstream legacy(kTestConfigDir + std::string("/session.json"));
+    legacy << R"({"device": {"centerFreqHz": 868.0e6, "centerFreqUnit": "MHz"}})";
+    legacy.close();
+
+    AppState dst;
+    CHECK(loadSessionSettings(dst) == true);
+    CHECK(dst.rxCenterFreqHz == 868.0e6);
+    CHECK(dst.txCenterFreqHz == 868.0e6);
+    CHECK(dst.rxCenterFreqUnit == FreqUnit::MHz);
+    CHECK(dst.txCenterFreqUnit == FreqUnit::MHz);
   }
 
   saveAutoSaveEnabled(true);

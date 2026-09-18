@@ -2,10 +2,17 @@
 
 namespace iqforge {
 
-// True if `windowName`'s docked tab is the one currently selected/visible in
-// its dock node -- i.e. the tab a user would actually see in front, not just
-// present somewhere in a tab bar. False if the window hasn't been drawn yet
-// this session, or isn't docked into a tabbed node at all.
-bool isTabActive(const char* windowName);
+// True if `windowName` currently has input focus -- i.e. it's the window
+// the user last clicked into/interacted with, regardless of whether it's
+// tabbed together with other windows or standing alone in its own dock
+// node. False if the window hasn't been drawn yet this session.
+//
+// This is deliberately focus-based rather than dock-tab-based: a window
+// alone in its own dock node (nothing else tabbed with it) is trivially
+// always "the selected tab" of that node, even though there's nothing to
+// actually select between -- so a tab-selection check alone can't tell "the
+// user is looking at this window" apart from "this window merely exists"
+// once it's been dragged out of a shared tab well.
+bool isWindowFocused(const char* windowName);
 
 } // namespace iqforge

@@ -143,14 +143,26 @@ bool drawEnvelopeModulation(AppState& state) {
 void drawTxControlContents(AppState& state) {
   bool connected = state.deviceManager.isConnected();
   bool active = state.isTxActive();
+  bool isIqForge = state.selectedKind == DeviceKind::IqForge;
 
-  if (connected && state.selectedKind == DeviceKind::IqForge) {
+  if (connected && isIqForge) {
     ImGui::TextDisabled(
         "IqForge: sine-only for now -- the generator/file below is ignored, "
-        "Start TX just enables the board's own DDS at the Device panel's "
-        "\"DDS freq\".");
+        "Start TX just enables the board's own DDS at the \"DDS freq\" below.");
     ImGui::Separator();
   }
+
+  // PlutoSDR has an independent TX LO, so this can genuinely differ from
+  // the RX panel's frequency; HackRF has only one physical LO shared between
+  // RX/TX, so its backend (see hackrf_device.cpp) keeps both in lockstep
+  // regardless of which one is set here.
+  if (FrequencyInputHz(isIqForge ? "DDS freq" : "TX center freq", &state.txCenterFreqHz, &state.txCenterFreqUnit)) {
+    if (connected && !state.deviceManager.device()->setTxFrequency(state.txCenterFreqHz)) {
+      state.log("TX frequency rejected by device");
+    }
+    if (state.selectedKind != DeviceKind::PlutoSDR) state.rxCenterFreqHz = state.txCenterFreqHz;
+  }
+  ImGui::Separator();
 
   int prevSourceMode = state.txSourceMode;
   ImGui::BeginDisabled(active);
@@ -386,14 +398,15 @@ void drawTxControlContents(AppState& state) {
             ImGui::TextDisabled("SigMF center freq: %s", formatHz(freqHz).c_str());
             ImGui::SameLine();
             if (ImGui::SmallButton("Apply to device")) {
-              state.centerFreqHz = freqHz;
+              state.txCenterFreqHz = freqHz;
               IDevice* dev = state.deviceManager.device();
-              if (dev && !dev->setFrequency(freqHz)) {
+              if (dev && !dev->setTxFrequency(freqHz)) {
                 state.log("Apply SigMF center freq: rejected by device");
               } else {
                 state.log("Apply SigMF center freq: " + formatHz(freqHz) +
                            (dev ? " (tuned)" : " (no device connected)"));
               }
+              if (state.selectedKind != DeviceKind::PlutoSDR) state.rxCenterFreqHz = freqHz;
             }
           }
           if (!meta.annotations.empty()) {

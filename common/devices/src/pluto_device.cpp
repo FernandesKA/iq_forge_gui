@@ -90,8 +90,8 @@ bool PlutoDevice::configurePhy(std::string& errorOut) {
   }
   iio_channel_attr_write_double(txPhy, "hardwaregain", cfg_.txGainDb);
 
-  checkedWriteLL(rxLo, "frequency", static_cast<long long>(cfg_.centerFreqHz), warnings);
-  checkedWriteLL(txLo, "frequency", static_cast<long long>(cfg_.centerFreqHz), warnings);
+  checkedWriteLL(rxLo, "frequency", static_cast<long long>(cfg_.rxCenterFreqHz), warnings);
+  checkedWriteLL(txLo, "frequency", static_cast<long long>(cfg_.txCenterFreqHz), warnings);
 
   if (!warnings.empty()) {
     errorOut = "Device rejected some settings (still connected, actual values may differ): ";
@@ -113,10 +113,21 @@ bool PlutoDevice::open(const DeviceConfig& cfg, std::string& errorOut) {
     errorOut = "Failed to connect to PlutoSDR at URI '" + uri + "'";
     return false;
   }
+  // See the member comment in pluto_device.h: TX/RX streaming each get their
+  // own independent connection to the same device, so one direction's
+  // buffer teardown can't desync the IIOD protocol connection the other
+  // direction is actively streaming on.
+  txCtx_ = iio_create_context_from_uri(uri.c_str());
+  rxCtx_ = iio_create_context_from_uri(uri.c_str());
+  if (!txCtx_ || !rxCtx_) {
+    errorOut = "Failed to open dedicated PlutoSDR RX/TX streaming connections at URI '" + uri + "'";
+    close();
+    return false;
+  }
 
   phy_ = iio_context_find_device(ctx_, "ad9361-phy");
-  rxDev_ = iio_context_find_device(ctx_, "cf-ad9361-lpc");
-  txDev_ = iio_context_find_device(ctx_, "cf-ad9361-dds-core-lpc");
+  rxDev_ = iio_context_find_device(rxCtx_, "cf-ad9361-lpc");
+  txDev_ = iio_context_find_device(txCtx_, "cf-ad9361-dds-core-lpc");
   if (!phy_ || !rxDev_ || !txDev_) {
     errorOut = "PlutoSDR context is missing expected ad9361 devices";
     close();
@@ -174,6 +185,14 @@ void PlutoDevice::close() {
   if (ctx_) {
     iio_context_destroy(ctx_);
     ctx_ = nullptr;
+  }
+  if (txCtx_) {
+    iio_context_destroy(txCtx_);
+    txCtx_ = nullptr;
+  }
+  if (rxCtx_) {
+    iio_context_destroy(rxCtx_);
+    rxCtx_ = nullptr;
   }
   phy_ = txDev_ = rxDev_ = nullptr;
   txChanI_ = txChanQ_ = rxChanI_ = rxChanQ_ = nullptr;
@@ -329,15 +348,20 @@ void PlutoDevice::rxThreadFunc(RxCallback callback) {
   rxRunning_ = false;
 }
 
-bool PlutoDevice::setFrequency(double hz) {
+bool PlutoDevice::setRxFrequency(double hz) {
   if (!phy_) return false;
-  cfg_.centerFreqHz = hz;
+  cfg_.rxCenterFreqHz = hz;
   iio_channel* rxLo = findLoChannel(phy_, false);
+  if (!rxLo) return false;
+  return iio_channel_attr_write_longlong(rxLo, "frequency", static_cast<long long>(hz)) == 0;
+}
+
+bool PlutoDevice::setTxFrequency(double hz) {
+  if (!phy_) return false;
+  cfg_.txCenterFreqHz = hz;
   iio_channel* txLo = findLoChannel(phy_, true);
-  if (!rxLo || !txLo) return false;
-  bool ok = iio_channel_attr_write_longlong(rxLo, "frequency", static_cast<long long>(hz)) == 0;
-  ok &= iio_channel_attr_write_longlong(txLo, "frequency", static_cast<long long>(hz)) == 0;
-  return ok;
+  if (!txLo) return false;
+  return iio_channel_attr_write_longlong(txLo, "frequency", static_cast<long long>(hz)) == 0;
 }
 
 bool PlutoDevice::setSampleRate(double sps) {

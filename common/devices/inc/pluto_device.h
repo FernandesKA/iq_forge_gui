@@ -33,7 +33,8 @@ class PlutoDevice : public IDevice {
   void stopRx() override;
   bool isRxRunning() const override { return rxRunning_.load(); }
 
-  bool setFrequency(double hz) override;
+  bool setRxFrequency(double hz) override;
+  bool setTxFrequency(double hz) override;
   bool setSampleRate(double sps) override;
   bool setBandwidth(double hz) override;
   bool setTxGain(double db) override;
@@ -47,7 +48,19 @@ class PlutoDevice : public IDevice {
   void txThreadFunc(std::shared_ptr<ISampleSource> source);
   void rxThreadFunc(RxCallback callback);
 
-  iio_context* ctx_ = nullptr;
+  // Separate iio_context per role (config, TX stream, RX stream) rather than
+  // one shared context: libiio's IIOD client protocol (used by both the
+  // "usb" and "ip" backends) multiplexes buffer open/close and attribute
+  // I/O over one connection per context, and destroying one direction's
+  // streaming buffer while the other is mid-refill/push on the SAME shared
+  // context can desync that connection -- observed as libiio's own
+  // "READ LINE"/"WRITE ALL" ETIMEDOUT errors on stderr when stopping TX
+  // (which pushes a silencing buffer and destroys it) while RX kept
+  // streaming. Each direction gets its own independent connection so
+  // tearing one down can never interfere with the other's data flow.
+  iio_context* ctx_ = nullptr;   // phy config only: frequency/gain/rate/bandwidth/checkAlive
+  iio_context* txCtx_ = nullptr; // TX buffer streaming only
+  iio_context* rxCtx_ = nullptr; // RX buffer streaming only
   iio_device* phy_ = nullptr;
   iio_device* txDev_ = nullptr;
   iio_device* rxDev_ = nullptr;

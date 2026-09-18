@@ -36,7 +36,13 @@ struct DeviceConfig {
   // (roughly 2.083-61.44 MSPS without a custom FIR filter loaded; below
   // ~2.083 MSPS the device rejects the rate outright).
   double sampleRateHz = 3e6;
-  double centerFreqHz = 915e6;
+  // Split RX/TX like the gain fields below, rather than one shared
+  // centerFreqHz: the AD9361 (PlutoSDR) has independent RX/TX LO
+  // synthesizers, so the two can genuinely differ there. HackRF has only one
+  // physical RF conversion chain shared between RX/TX (true half-duplex) --
+  // its backend keeps these two in lockstep internally, see hackrf_device.cpp.
+  double rxCenterFreqHz = 915e6;
+  double txCenterFreqHz = 915e6;
   double bandwidthHz = 2e6;
 
   // Pluto: TX attenuation in dB, 0 (max power) .. -89.75. HackRF: mapped to
@@ -90,7 +96,11 @@ class IDevice {
   virtual void stopRx() = 0;
   virtual bool isRxRunning() const = 0;
 
-  virtual bool setFrequency(double hz) = 0;
+  // Split like DeviceConfig::rxCenterFreqHz/txCenterFreqHz above -- PlutoSDR
+  // tunes its two LOs independently; HackRF (single conversion chain) keeps
+  // them equal internally regardless of which one is called.
+  virtual bool setRxFrequency(double hz) = 0;
+  virtual bool setTxFrequency(double hz) = 0;
   virtual bool setSampleRate(double sps) = 0;
   virtual bool setBandwidth(double hz) = 0;
   virtual bool setTxGain(double db) = 0;

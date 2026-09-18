@@ -43,7 +43,7 @@ bool HackRFDevice::open(const DeviceConfig& cfg, std::string& errorOut) {
   hackrf_set_amp_enable(dev_, 0);
 
   std::vector<std::string> warnings;
-  if (!setFrequency(cfg.centerFreqHz)) warnings.push_back("center frequency rejected");
+  if (!setRxFrequency(cfg.rxCenterFreqHz)) warnings.push_back("center frequency rejected");
   if (!setSampleRate(cfg.sampleRateHz)) warnings.push_back("sample rate rejected");
   if (!setBandwidth(cfg.bandwidthHz)) warnings.push_back("bandwidth rejected");
   if (!setTxGain(cfg.txGainDb)) warnings.push_back("TX gain rejected");
@@ -169,11 +169,15 @@ int HackRFDevice::handleRx(hackrf_transfer* transfer) {
   return 0;
 }
 
-bool HackRFDevice::setFrequency(double hz) {
+bool HackRFDevice::setSharedFrequency(double hz) {
   if (!dev_) return false;
-  cfg_.centerFreqHz = hz;
+  cfg_.rxCenterFreqHz = hz;
+  cfg_.txCenterFreqHz = hz;
   return hackrf_set_freq(dev_, static_cast<uint64_t>(hz)) == HACKRF_SUCCESS;
 }
+
+bool HackRFDevice::setRxFrequency(double hz) { return setSharedFrequency(hz); }
+bool HackRFDevice::setTxFrequency(double hz) { return setSharedFrequency(hz); }
 
 bool HackRFDevice::setSampleRate(double sps) {
   if (!dev_) return false;

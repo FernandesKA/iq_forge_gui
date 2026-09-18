@@ -250,8 +250,10 @@ nlohmann::json settingsToJson(const AppState& state) {
   dev["uri"] = std::string(state.uriBuffer);
   dev["sampleRateHz"] = state.sampleRateHz;
   dev["sampleRateUnit"] = freqUnitName(state.sampleRateUnit);
-  dev["centerFreqHz"] = state.centerFreqHz;
-  dev["centerFreqUnit"] = freqUnitName(state.centerFreqUnit);
+  dev["rxCenterFreqHz"] = state.rxCenterFreqHz;
+  dev["rxCenterFreqUnit"] = freqUnitName(state.rxCenterFreqUnit);
+  dev["txCenterFreqHz"] = state.txCenterFreqHz;
+  dev["txCenterFreqUnit"] = freqUnitName(state.txCenterFreqUnit);
   dev["bandwidthHz"] = state.bandwidthHz;
   dev["bandwidthUnit"] = freqUnitName(state.bandwidthUnit);
   dev["txGainDb"] = state.txGainDb;
@@ -352,8 +354,15 @@ void applySettingsJson(AppState& state, const nlohmann::json& j) {
     setBuf(state.uriBuffer, dev.value("uri", std::string()));
     state.sampleRateHz = dev.value("sampleRateHz", state.sampleRateHz);
     state.sampleRateUnit = freqUnitFromName(dev.value("sampleRateUnit", std::string()), state.sampleRateUnit);
-    state.centerFreqHz = dev.value("centerFreqHz", state.centerFreqHz);
-    state.centerFreqUnit = freqUnitFromName(dev.value("centerFreqUnit", std::string()), state.centerFreqUnit);
+    // Fall back to the old shared "centerFreqHz"/"centerFreqUnit" keys (pre
+    // independent RX/TX frequency support) for both directions, so existing
+    // settings.json files aren't silently reset to the default.
+    double legacyCenterFreqHz = dev.value("centerFreqHz", state.rxCenterFreqHz);
+    std::string legacyCenterFreqUnit = dev.value("centerFreqUnit", std::string());
+    state.rxCenterFreqHz = dev.value("rxCenterFreqHz", legacyCenterFreqHz);
+    state.rxCenterFreqUnit = freqUnitFromName(dev.value("rxCenterFreqUnit", legacyCenterFreqUnit), state.rxCenterFreqUnit);
+    state.txCenterFreqHz = dev.value("txCenterFreqHz", legacyCenterFreqHz);
+    state.txCenterFreqUnit = freqUnitFromName(dev.value("txCenterFreqUnit", legacyCenterFreqUnit), state.txCenterFreqUnit);
     state.bandwidthHz = dev.value("bandwidthHz", state.bandwidthHz);
     state.bandwidthUnit = freqUnitFromName(dev.value("bandwidthUnit", std::string()), state.bandwidthUnit);
     state.txGainDb = dev.value("txGainDb", state.txGainDb);

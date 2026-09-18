@@ -32,7 +32,11 @@ class HackRFDevice : public IDevice {
   void stopRx() override;
   bool isRxRunning() const override { return rxRunning_.load(); }
 
-  bool setFrequency(double hz) override;
+  // HackRF has one physical RF conversion chain shared between RX/TX --
+  // both just retune that single synthesizer, keeping cfg_.rxCenterFreqHz/
+  // txCenterFreqHz equal (true half-duplex, see i_device.h).
+  bool setRxFrequency(double hz) override;
+  bool setTxFrequency(double hz) override;
   bool setSampleRate(double sps) override;
   bool setBandwidth(double hz) override;
   bool setTxGain(double db) override;
@@ -43,6 +47,8 @@ class HackRFDevice : public IDevice {
   std::string name() const override { return "HackRF"; }
 
  private:
+  bool setSharedFrequency(double hz);
+
   static int txCallbackTrampoline(hackrf_transfer* transfer);
   static int rxCallbackTrampoline(hackrf_transfer* transfer);
   int handleTx(hackrf_transfer* transfer);
