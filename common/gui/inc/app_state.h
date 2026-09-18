@@ -255,11 +255,17 @@ struct AppState {
   bool showSpectrumViewerTab = false;
 
   // --- Log ---
+  struct LogEntry {
+    std::string text;
+    bool isError = false; // drawn in the same red used for error text elsewhere in the GUI
+  };
   std::mutex logMutex;
-  std::deque<std::string> logMessages;
-  void log(const std::string& msg) {
+  std::deque<LogEntry> logMessages;
+  void log(const std::string& msg) { logImpl(msg, false); }
+  void logError(const std::string& msg) { logImpl(msg, true); }
+  void logImpl(const std::string& msg, bool isError) {
     std::lock_guard<std::mutex> lock(logMutex);
-    logMessages.push_back(msg);
+    logMessages.push_back({msg, isError});
     if (logMessages.size() > 500) logMessages.pop_front();
   }
 

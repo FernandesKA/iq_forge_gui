@@ -63,7 +63,7 @@ constexpr size_t kGeneratorPreviewSamples = 4096;
 
 void AppState::updateDisplays() {
   if (deviceManager.pollHealth()) {
-    log("Device disconnected (lost communication)");
+    logError("Device disconnected (lost communication)");
   }
 
   // At high sample rates several blocks can drain from a ring in a single
