@@ -18,7 +18,7 @@ namespace iqforge {
 
 namespace {
 const char* kWaveformNames[] = {"Tone", "Multi-tone", "Chirp / sweep", "Pulse", "Barker", "Noise", "Ramp", "PRBS"};
-const char* kEnvelopeShapeNames[] = {"Rectangular", "Sinc (sin(x)/x)", "Gaussian", "Hann"};
+const char* kEnvelopeShapeNames[] = {"Rectangular", "Sine (AM)", "Sinc (sin(x)/x)", "Gaussian"};
 const char* kBarkerCodeNames[] = {
     "B2  [+ -]",       "B2  [+ +]",       "B3  [+ + -]",
     "B4  [+ + - +]",   "B4  [+ + + -]",   "B5  [+ + + - +]",
@@ -67,21 +67,75 @@ bool clampGeneratorFrequencies(GeneratorConfig& cfg, double sampleRateHz) {
     cfg.pulseDurationSec = clampedPulseDuration;
     changed = true;
   }
+  const float clampedDepth = std::clamp(cfg.envelopeModDepth, 0.0f, 1.0f);
+  if (clampedDepth != cfg.envelopeModDepth) {
+    cfg.envelopeModDepth = clampedDepth;
+    changed = true;
+  }
+  const double clampedRectPeriod = cfg.envelopeRectPeriodSec > 0.0 ? cfg.envelopeRectPeriodSec : 1e-6;
+  if (clampedRectPeriod != cfg.envelopeRectPeriodSec) {
+    cfg.envelopeRectPeriodSec = clampedRectPeriod;
+    changed = true;
+  }
+  const double clampedRectDuration = std::clamp(cfg.envelopeRectDurationSec, 0.0, cfg.envelopeRectPeriodSec);
+  if (clampedRectDuration != cfg.envelopeRectDurationSec) {
+    cfg.envelopeRectDurationSec = clampedRectDuration;
+    changed = true;
+  }
+  const auto clampModRate = [nyquistHz](double& hz) {
+    const double clamped = std::clamp(hz, 0.0, nyquistHz);
+    if (clamped == hz) return false;
+    hz = clamped;
+    return true;
+  };
+  changed |= clampModRate(cfg.envelopeSineFreqHz);
+  changed |= clampModRate(cfg.envelopeSincFreqHz);
+  changed |= clampModRate(cfg.envelopeGaussianFreqHz);
+  const double clampedSigma = cfg.envelopeGaussianSigmaSec > 0.0 ? cfg.envelopeGaussianSigmaSec : 1e-9;
+  if (clampedSigma != cfg.envelopeGaussianSigmaSec) {
+    cfg.envelopeGaussianSigmaSec = clampedSigma;
+    changed = true;
+  }
   return changed;
 }
 
-// Shared by the Pulse waveform (which always gates itself) and the "Pulse
-// envelope" option on other waveforms -- both configure the same
-// shape/duration/period fields.
-bool drawEnvelopeShapeAndTiming(AppState& state) {
+// The Pulse waveform's own gating: ДИ (pulse duration) within ППИ (pulse
+// repetition period) -- always a hard rectangular on/off gate.
+bool drawPulseTiming(AppState& state) {
+  bool changed = DurationInputSec("Pulse duration (ДИ)", &state.genConfig.pulseDurationSec, &state.pulseDurationUnit);
+  changed |= DurationInputSec("Pulse period (ППИ)", &state.genConfig.pulsePeriodSec, &state.pulsePeriodUnit);
+  return changed;
+}
+
+// The "Pulse envelope" option on other (continuous) waveforms: pick a shape
+// and set its own dedicated timing/width fields, plus a shared AM-style
+// modulation depth.
+bool drawEnvelopeModulation(AppState& state) {
+  GeneratorConfig& cfg = state.genConfig;
   bool changed = false;
-  int shape = static_cast<int>(state.genConfig.envelopeShape);
+  int shape = static_cast<int>(cfg.envelopeShape);
   if (ImGui::Combo("Envelope shape", &shape, kEnvelopeShapeNames, IM_ARRAYSIZE(kEnvelopeShapeNames))) {
-    state.genConfig.envelopeShape = static_cast<EnvelopeShape>(shape);
+    cfg.envelopeShape = static_cast<EnvelopeShape>(shape);
     changed = true;
   }
-  changed |= DurationInputSec("Pulse duration", &state.genConfig.pulseDurationSec, &state.pulseDurationUnit);
-  changed |= DurationInputSec("Pulse period", &state.genConfig.pulsePeriodSec, &state.pulsePeriodUnit);
+  changed |= ImGui::SliderFloat("Modulation depth", &cfg.envelopeModDepth, 0.0f, 1.0f);
+
+  switch (cfg.envelopeShape) {
+    case EnvelopeShape::Rectangular:
+      changed |= DurationInputSec("Envelope duration (ДИ)", &cfg.envelopeRectDurationSec, &state.envelopeRectDurationUnit);
+      changed |= DurationInputSec("Envelope period (ППИ)", &cfg.envelopeRectPeriodSec, &state.envelopeRectPeriodUnit);
+      break;
+    case EnvelopeShape::Sine:
+      changed |= FrequencyInputHz("Modulation frequency", &cfg.envelopeSineFreqHz, &state.envelopeSineFreqUnit);
+      break;
+    case EnvelopeShape::Sinc:
+      changed |= FrequencyInputHz("Modulation frequency", &cfg.envelopeSincFreqHz, &state.envelopeSincFreqUnit);
+      break;
+    case EnvelopeShape::Gaussian:
+      changed |= FrequencyInputHz("Modulation frequency", &cfg.envelopeGaussianFreqHz, &state.envelopeGaussianFreqUnit);
+      changed |= DurationInputSec("Width (σ)", &cfg.envelopeGaussianSigmaSec, &state.envelopeGaussianSigmaUnit);
+      break;
+  }
   return changed;
 }
 }
@@ -146,7 +200,7 @@ void drawTxControlContents(AppState& state) {
             "Sweep duration", &state.genConfig.chirpDurationSec, &state.chirpDurationUnit);
         break;
       case WaveformType::Pulse:
-        generatorChanged |= drawEnvelopeShapeAndTiming(state);
+        generatorChanged |= drawPulseTiming(state);
         break;
       case WaveformType::Barker: {
         int code = static_cast<int>(state.genConfig.barkerCode);
@@ -186,7 +240,7 @@ void drawTxControlContents(AppState& state) {
     if (state.genConfig.type != WaveformType::Pulse) {
       generatorChanged |= ImGui::Checkbox("Pulse envelope", &state.genConfig.envelopeEnabled);
       if (state.genConfig.envelopeEnabled) {
-        generatorChanged |= drawEnvelopeShapeAndTiming(state);
+        generatorChanged |= drawEnvelopeModulation(state);
       }
     }
 

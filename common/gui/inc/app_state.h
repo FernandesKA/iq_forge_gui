@@ -68,8 +68,14 @@ struct AppState {
   TimeUnit chirpDurationUnit = TimeUnit::Ms;
   FreqUnit barkerChipRateUnit = FreqUnit::kHz;
   FreqUnit prbsBitRateUnit = FreqUnit::kHz;
-  TimeUnit pulseDurationUnit = TimeUnit::Us;
-  TimeUnit pulsePeriodUnit = TimeUnit::Us;
+  TimeUnit pulseDurationUnit = TimeUnit::Us;      // Pulse waveform's own ДИ
+  TimeUnit pulsePeriodUnit = TimeUnit::Us;        // Pulse waveform's own ППИ
+  TimeUnit envelopeRectDurationUnit = TimeUnit::Us; // Rectangular envelope's own ДИ
+  TimeUnit envelopeRectPeriodUnit = TimeUnit::Us;   // Rectangular envelope's own ППИ
+  FreqUnit envelopeSineFreqUnit = FreqUnit::kHz;
+  FreqUnit envelopeSincFreqUnit = FreqUnit::kHz;
+  FreqUnit envelopeGaussianFreqUnit = FreqUnit::kHz;
+  TimeUnit envelopeGaussianSigmaUnit = TimeUnit::Us;
   char filePathBuffer[512] = "";
   bool fileLoop = true;
   // Raw formats (.cf32/.ci16) don't store their own sample rate, so the user

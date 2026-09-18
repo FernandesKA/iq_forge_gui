@@ -210,17 +210,17 @@ BarkerCode barkerCodeFromName(const std::string& s, BarkerCode fallback) {
 const char* envelopeShapeName(EnvelopeShape s) {
   switch (s) {
     case EnvelopeShape::Rectangular: return "Rectangular";
+    case EnvelopeShape::Sine: return "Sine";
     case EnvelopeShape::Sinc: return "Sinc";
     case EnvelopeShape::Gaussian: return "Gaussian";
-    case EnvelopeShape::Hann: return "Hann";
   }
   return "Rectangular";
 }
 EnvelopeShape envelopeShapeFromName(const std::string& s, EnvelopeShape fallback) {
   if (s == "Rectangular") return EnvelopeShape::Rectangular;
+  if (s == "Sine") return EnvelopeShape::Sine;
   if (s == "Sinc") return EnvelopeShape::Sinc;
   if (s == "Gaussian") return EnvelopeShape::Gaussian;
-  if (s == "Hann") return EnvelopeShape::Hann;
   return fallback;
 }
 
@@ -280,8 +280,21 @@ nlohmann::json settingsToJson(const AppState& state) {
   gen["pulseDurationUnit"] = timeUnitName(state.pulseDurationUnit);
   gen["pulsePeriodSec"] = g.pulsePeriodSec;
   gen["pulsePeriodUnit"] = timeUnitName(state.pulsePeriodUnit);
+  gen["envelopeModDepth"] = g.envelopeModDepth;
   gen["envelopeShape"] = envelopeShapeName(g.envelopeShape);
   gen["envelopeEnabled"] = g.envelopeEnabled;
+  gen["envelopeRectDurationSec"] = g.envelopeRectDurationSec;
+  gen["envelopeRectDurationUnit"] = timeUnitName(state.envelopeRectDurationUnit);
+  gen["envelopeRectPeriodSec"] = g.envelopeRectPeriodSec;
+  gen["envelopeRectPeriodUnit"] = timeUnitName(state.envelopeRectPeriodUnit);
+  gen["envelopeSineFreqHz"] = g.envelopeSineFreqHz;
+  gen["envelopeSineFreqUnit"] = freqUnitName(state.envelopeSineFreqUnit);
+  gen["envelopeSincFreqHz"] = g.envelopeSincFreqHz;
+  gen["envelopeSincFreqUnit"] = freqUnitName(state.envelopeSincFreqUnit);
+  gen["envelopeGaussianFreqHz"] = g.envelopeGaussianFreqHz;
+  gen["envelopeGaussianFreqUnit"] = freqUnitName(state.envelopeGaussianFreqUnit);
+  gen["envelopeGaussianSigmaSec"] = g.envelopeGaussianSigmaSec;
+  gen["envelopeGaussianSigmaUnit"] = timeUnitName(state.envelopeGaussianSigmaUnit);
   gen["prbsPolynomial"] = prbsPolynomialName(g.prbsPolynomial);
   gen["prbsBitRateHz"] = g.prbsBitRateHz;
   gen["prbsBitRateUnit"] = freqUnitName(state.prbsBitRateUnit);
@@ -379,8 +392,27 @@ void applySettingsJson(AppState& state, const nlohmann::json& j) {
           timeUnitFromName(gen.value("pulseDurationUnit", std::string()), state.pulseDurationUnit);
       g.pulsePeriodSec = gen.value("pulsePeriodSec", g.pulsePeriodSec);
       state.pulsePeriodUnit = timeUnitFromName(gen.value("pulsePeriodUnit", std::string()), state.pulsePeriodUnit);
+      g.envelopeModDepth = gen.value("envelopeModDepth", g.envelopeModDepth);
       g.envelopeShape = envelopeShapeFromName(gen.value("envelopeShape", std::string()), g.envelopeShape);
       g.envelopeEnabled = gen.value("envelopeEnabled", g.envelopeEnabled);
+      g.envelopeRectDurationSec = gen.value("envelopeRectDurationSec", g.envelopeRectDurationSec);
+      state.envelopeRectDurationUnit =
+          timeUnitFromName(gen.value("envelopeRectDurationUnit", std::string()), state.envelopeRectDurationUnit);
+      g.envelopeRectPeriodSec = gen.value("envelopeRectPeriodSec", g.envelopeRectPeriodSec);
+      state.envelopeRectPeriodUnit =
+          timeUnitFromName(gen.value("envelopeRectPeriodUnit", std::string()), state.envelopeRectPeriodUnit);
+      g.envelopeSineFreqHz = gen.value("envelopeSineFreqHz", g.envelopeSineFreqHz);
+      state.envelopeSineFreqUnit =
+          freqUnitFromName(gen.value("envelopeSineFreqUnit", std::string()), state.envelopeSineFreqUnit);
+      g.envelopeSincFreqHz = gen.value("envelopeSincFreqHz", g.envelopeSincFreqHz);
+      state.envelopeSincFreqUnit =
+          freqUnitFromName(gen.value("envelopeSincFreqUnit", std::string()), state.envelopeSincFreqUnit);
+      g.envelopeGaussianFreqHz = gen.value("envelopeGaussianFreqHz", g.envelopeGaussianFreqHz);
+      state.envelopeGaussianFreqUnit =
+          freqUnitFromName(gen.value("envelopeGaussianFreqUnit", std::string()), state.envelopeGaussianFreqUnit);
+      g.envelopeGaussianSigmaSec = gen.value("envelopeGaussianSigmaSec", g.envelopeGaussianSigmaSec);
+      state.envelopeGaussianSigmaUnit =
+          timeUnitFromName(gen.value("envelopeGaussianSigmaUnit", std::string()), state.envelopeGaussianSigmaUnit);
       g.prbsPolynomial = prbsPolynomialFromName(gen.value("prbsPolynomial", std::string()), g.prbsPolynomial);
       g.prbsBitRateHz = gen.value("prbsBitRateHz", g.prbsBitRateHz);
       state.prbsBitRateUnit = freqUnitFromName(gen.value("prbsBitRateUnit", std::string()), state.prbsBitRateUnit);

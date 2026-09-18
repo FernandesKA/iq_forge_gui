@@ -21,15 +21,14 @@ enum class WaveformType {
   Prbs,
 };
 
-// Shape of the pulse/envelope gate applied over [0, pulseDurationSec) of
-// every pulsePeriodSec (see GeneratorConfig below). Rectangular is a hard
-// on/off gate; the others taper to 0 at both edges of the window, which
-// narrows the transmitted spectrum's sidelobes compared to a rectangle.
+// Shape of the envelope applied to a non-Pulse waveform when envelopeEnabled
+// is set (see GeneratorConfig below). Each shape has its own dedicated
+// timing/width fields, independent of the Pulse waveform's own ДИ/ППИ.
 enum class EnvelopeShape {
-  Rectangular,
-  Sinc,     // sin(x)/x main lobe plus a few sidelobes, zero at both edges
-  Gaussian,
-  Hann,     // raised cosine, same shape as the FFT window of the same name
+  Rectangular, // hard on/off gate, own ДИ/ППИ (envelopeRect*)
+  Sine,        // continuous AM-style sinusoid at envelopeSineFreqHz
+  Sinc,        // sin(x)/x main lobe plus a few sidelobes, repeats at envelopeSincFreqHz
+  Gaussian,    // Gaussian bump of width envelopeGaussianSigmaSec, repeats at envelopeGaussianFreqHz
 };
 
 // All Barker sequences, excluding variants obtainable only by negation or
@@ -78,17 +77,41 @@ struct GeneratorConfig {
   double barkerChipRateHz = 100e3;
 
   // Pulse: a constant-amplitude (real) carrier gated on for pulseDurationSec
-  // out of every pulsePeriodSec, then repeats, shaped by envelopeShape. The
-  // same fields also drive the envelope below, so pulse timing/shape is
-  // configured in one place regardless of how it's applied.
-  double pulseDurationSec = 10e-6;
-  double pulsePeriodSec = 100e-6;
-  EnvelopeShape envelopeShape = EnvelopeShape::Rectangular;
+  // (ДИ) out of every pulsePeriodSec (ППИ), then repeats. Always a hard
+  // rectangular on/off gate; for a shaped envelope on top of a *continuous*
+  // waveform instead, see envelopeEnabled below.
+  double pulseDurationSec = 10e-6;  // ДИ
+  double pulsePeriodSec = 100e-6;   // ППИ
 
-  // Envelope: gates any *other* waveform type on/off using the pulse timing
-  // above, e.g. turning a chirp into a pulsed LFM radar signal. Ignored for
-  // WaveformType::Pulse, which always applies its own gating.
+  // Envelope: multiplies any *other* (non-Pulse) waveform by a repeating
+  // shape, e.g. turning a tone into an AM-modulated or pulsed carrier.
+  // Ignored for WaveformType::Pulse, which always applies its own gating
+  // (above) instead. envelopeModDepth (0..1) controls how far the shape
+  // pulls the gain down from 1.0 at its deepest point: 1.0 (default) reaches
+  // all the way to the shape's own floor (0 gain for Rectangular/Sinc/
+  // Gaussian, full 100%-AM for Sine); lower values leave a partial floor
+  // instead of the full swing.
   bool envelopeEnabled = false;
+  EnvelopeShape envelopeShape = EnvelopeShape::Rectangular;
+  float envelopeModDepth = 1.0f; // 0..1
+
+  // Rectangular envelope: its own ДИ/ППИ, independent of the Pulse
+  // waveform's fields above.
+  double envelopeRectDurationSec = 10e-6; // ДИ
+  double envelopeRectPeriodSec = 100e-6;  // ППИ
+
+  // Sine envelope: a classic AM-style sinusoid at this rate; envelopeModDepth
+  // above plays the role of modulation depth (amplitude of the sinusoid).
+  double envelopeSineFreqHz = 10e3;
+
+  // Sinc envelope: sin(x)/x main lobe (3 sidelobes each side), one full
+  // window per period, repeating at this rate.
+  double envelopeSincFreqHz = 10e3;
+
+  // Gaussian envelope: a Gaussian bump of width envelopeGaussianSigmaSec
+  // (standard deviation), repeating at this rate.
+  double envelopeGaussianFreqHz = 10e3;
+  double envelopeGaussianSigmaSec = 5e-6;
 
   // PRBS: a continuously repeated pseudorandom bit sequence from an LFSR of
   // the selected standard polynomial -- useful for testing signal paths
@@ -141,6 +164,7 @@ class SignalGenerator : public ISampleSource {
   void generatePrbs(Sample* out, size_t count, const GeneratorConfig& cfg);
   void generatePrbsBpsk(Sample* out, size_t count, const GeneratorConfig& cfg);
   void generatePrbsQpsk(Sample* out, size_t count, const GeneratorConfig& cfg);
+  void applyPulseGate(Sample* out, size_t count, const GeneratorConfig& cfg);
   void applyEnvelope(Sample* out, size_t count, const GeneratorConfig& cfg);
   void applyNoise(Sample* out, size_t count, const GeneratorConfig& cfg);
 
@@ -158,6 +182,7 @@ class SignalGenerator : public ISampleSource {
   double tonePhase_ = 0.0;
   std::vector<double> multiTonePhases_;
   double chirpTime_ = 0.0;
+  double pulseGateTime_ = 0.0;
   double envelopeTime_ = 0.0;
   size_t barkerChipIndex_ = 0;
   double barkerChipPhase_ = 0.0;

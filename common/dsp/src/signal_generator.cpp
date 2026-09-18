@@ -10,27 +10,49 @@ namespace {
 constexpr double kTwoPi = 6.283185307179586476925286766559;
 constexpr double kPi = kTwoPi / 2.0;
 
-// Gain of the envelope shape at tMod within an active [0, duration) window,
-// 0 outside it. u is the normalized position across the window (0..1).
-double envelopeGain(double tMod, double duration, EnvelopeShape shape) {
-  if (duration <= 0.0 || tMod < 0.0 || tMod >= duration) return 0.0;
-  const double u = tMod / duration;
-  switch (shape) {
+// The envelope's own repetition period, per shape: Rectangular uses its
+// dedicated ППИ field, the others are 1 / their own modulation frequency.
+double envelopePeriodSec(const GeneratorConfig& cfg) {
+  switch (cfg.envelopeShape) {
     case EnvelopeShape::Rectangular:
-      return 1.0;
-    case EnvelopeShape::Hann:
-      return 0.5 - 0.5 * std::cos(kTwoPi * u);
+      return cfg.envelopeRectPeriodSec > 0.0 ? cfg.envelopeRectPeriodSec : 1e-6;
+    case EnvelopeShape::Sine:
+      return cfg.envelopeSineFreqHz > 0.0 ? 1.0 / cfg.envelopeSineFreqHz : 1e-6;
+    case EnvelopeShape::Sinc:
+      return cfg.envelopeSincFreqHz > 0.0 ? 1.0 / cfg.envelopeSincFreqHz : 1e-6;
+    case EnvelopeShape::Gaussian:
+      return cfg.envelopeGaussianFreqHz > 0.0 ? 1.0 / cfg.envelopeGaussianFreqHz : 1e-6;
+  }
+  return 1e-6;
+}
+
+// Unmodulated (envelopeModDepth == 1.0) gain of the envelope shape at tMod,
+// the time elapsed since the start of the current period. Every shape ranges
+// over [0, 1]; applyEnvelope() blends this against 1.0 by envelopeModDepth.
+double envelopeShapeGain(double tMod, double period, const GeneratorConfig& cfg) {
+  switch (cfg.envelopeShape) {
+    case EnvelopeShape::Rectangular: {
+      const double duration = std::clamp(cfg.envelopeRectDurationSec, 0.0, period);
+      return tMod < duration ? 1.0 : 0.0;
+    }
+    case EnvelopeShape::Sine:
+      // 0.5 + 0.5*sin(...) keeps the shape unipolar (0..1) instead of
+      // bipolar, so it scales the carrier's magnitude rather than flipping
+      // its sign -- envelopeModDepth == 1.0 then reaches all the way down to
+      // 0, matching the classic definition of 100% AM modulation depth.
+      return 0.5 + 0.5 * std::sin(kTwoPi * tMod / period);
     case EnvelopeShape::Sinc: {
-      // 3 sidelobes on each side; x is 0 at the window center and +-3 at its
-      // edges, where sin(x) naturally reaches zero -- no discontinuity.
+      // 3 sidelobes on each side; x is 0 at the window center and +-3 at the
+      // period's edges, where sin(x) naturally reaches zero -- no
+      // discontinuity across the period wrap.
+      const double u = tMod / period;
       constexpr double kSideLobes = 3.0;
       const double x = (u - 0.5) * 2.0 * kSideLobes;
       return x == 0.0 ? 1.0 : std::sin(kPi * x) / (kPi * x);
     }
     case EnvelopeShape::Gaussian: {
-      // sigma chosen so the window edges sit at +-3 sigma (~0.011 gain).
-      constexpr double kSigma = 1.0 / 6.0;
-      const double x = (u - 0.5) / kSigma;
+      const double sigma = cfg.envelopeGaussianSigmaSec > 0.0 ? cfg.envelopeGaussianSigmaSec : 1e-9;
+      const double x = (tMod - period / 2.0) / sigma;
       return std::exp(-0.5 * x * x);
     }
   }
@@ -58,6 +80,13 @@ GeneratorConfig clampBasebandFrequencies(GeneratorConfig cfg) {
   cfg.barkerChipRateHz = std::clamp(cfg.barkerChipRateHz, 0.0, maxChipRateHz);
   cfg.pulsePeriodSec = cfg.pulsePeriodSec > 0.0 ? cfg.pulsePeriodSec : 1e-6;
   cfg.pulseDurationSec = std::clamp(cfg.pulseDurationSec, 0.0, cfg.pulsePeriodSec);
+  cfg.envelopeModDepth = std::clamp(cfg.envelopeModDepth, 0.0f, 1.0f);
+  cfg.envelopeRectPeriodSec = cfg.envelopeRectPeriodSec > 0.0 ? cfg.envelopeRectPeriodSec : 1e-6;
+  cfg.envelopeRectDurationSec = std::clamp(cfg.envelopeRectDurationSec, 0.0, cfg.envelopeRectPeriodSec);
+  cfg.envelopeSineFreqHz = std::clamp(cfg.envelopeSineFreqHz, 0.0, nyquistHz);
+  cfg.envelopeSincFreqHz = std::clamp(cfg.envelopeSincFreqHz, 0.0, nyquistHz);
+  cfg.envelopeGaussianFreqHz = std::clamp(cfg.envelopeGaussianFreqHz, 0.0, nyquistHz);
+  cfg.envelopeGaussianSigmaSec = cfg.envelopeGaussianSigmaSec > 0.0 ? cfg.envelopeGaussianSigmaSec : 1e-9;
   // QPSK packs 2 bits/symbol, so the symbol rate (which must stay below
   // Nyquist for the RRC filter to make sense) is half the bit rate --
   // letting the bit rate itself run up to 2x sample rate in that mode.
@@ -203,10 +232,12 @@ size_t SignalGenerator::generate(Sample* out, size_t count) {
     case WaveformType::Prbs: generatePrbs(out, count, cfg); break;
   }
 
-  // Pulse always gates itself; any other waveform can opt into the same
-  // shaped envelope to turn it into a pulsed signal (e.g. a pulsed chirp
-  // for radar-style testing).
-  if (cfg.type == WaveformType::Pulse || cfg.envelopeEnabled) {
+  // Pulse always gates itself with its own ДИ/ППИ; any other waveform can
+  // opt into a separate shaped envelope instead (e.g. AM-modulating a tone,
+  // or turning a chirp into a pulsed LFM radar signal).
+  if (cfg.type == WaveformType::Pulse) {
+    applyPulseGate(out, count, cfg);
+  } else if (cfg.envelopeEnabled) {
     applyEnvelope(out, count, cfg);
   }
   // Applied last (after envelope/pulse gating), so the noise floor is
@@ -264,21 +295,36 @@ void SignalGenerator::generateChirp(Sample* out, size_t count, const GeneratorCo
 }
 
 void SignalGenerator::generatePulse(Sample* out, size_t count, const GeneratorConfig& cfg) {
-  // The gating/shaping itself is applied uniformly afterwards by
-  // applyEnvelope(); the "fill" for a bare pulse is just a constant (real)
-  // carrier at 0 Hz baseband.
+  // The gating itself is applied uniformly afterwards by applyPulseGate();
+  // the "fill" for a bare pulse is just a constant (real) carrier at 0 Hz
+  // baseband.
   std::fill(out, out + count, Sample(cfg.amplitude, 0.0f));
 }
 
-void SignalGenerator::applyEnvelope(Sample* out, size_t count, const GeneratorConfig& cfg) {
+void SignalGenerator::applyPulseGate(Sample* out, size_t count, const GeneratorConfig& cfg) {
   const double dt = 1.0 / cfg.sampleRateHz;
   const double period = cfg.pulsePeriodSec > 0.0 ? cfg.pulsePeriodSec : 1e-6;
   const double duration = std::clamp(cfg.pulseDurationSec, 0.0, period);
 
+  double t = pulseGateTime_;
+  for (size_t i = 0; i < count; ++i) {
+    const double tMod = std::fmod(t, period);
+    out[i] *= (tMod < duration) ? 1.0f : 0.0f;
+    t += dt;
+  }
+  pulseGateTime_ = std::fmod(t, period);
+}
+
+void SignalGenerator::applyEnvelope(Sample* out, size_t count, const GeneratorConfig& cfg) {
+  const double dt = 1.0 / cfg.sampleRateHz;
+  const double period = envelopePeriodSec(cfg);
+  const double depth = std::clamp(static_cast<double>(cfg.envelopeModDepth), 0.0, 1.0);
+
   double t = envelopeTime_;
   for (size_t i = 0; i < count; ++i) {
     const double tMod = std::fmod(t, period);
-    out[i] *= static_cast<float>(envelopeGain(tMod, duration, cfg.envelopeShape));
+    const double gain = 1.0 - depth * (1.0 - envelopeShapeGain(tMod, period, cfg));
+    out[i] *= static_cast<float>(gain);
     t += dt;
   }
   envelopeTime_ = std::fmod(t, period);

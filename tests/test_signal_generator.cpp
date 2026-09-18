@@ -276,16 +276,18 @@ void run_signal_generator_tests() {
     }
   }
 
-  // Pulse envelope gates any other waveform type on/off using the same
-  // duration/period timing, e.g. turning a tone into a pulsed carrier.
+  // Rectangular envelope gates any other waveform type on/off using its own
+  // (separate from the Pulse waveform's) duration/period timing, e.g.
+  // turning a tone into a pulsed carrier.
   {
     GeneratorConfig cfg;
     cfg.type = WaveformType::Tone;
     cfg.sampleRateHz = sampleRate;
     cfg.toneFreqHz = 100e3;
     cfg.envelopeEnabled = true;
-    cfg.pulseDurationSec = 10e-6;
-    cfg.pulsePeriodSec = 30e-6;
+    cfg.envelopeShape = EnvelopeShape::Rectangular;
+    cfg.envelopeRectDurationSec = 10e-6;
+    cfg.envelopeRectPeriodSec = 30e-6;
     cfg.amplitude = 1.0f;
     SignalGenerator gen(cfg);
 
@@ -412,30 +414,91 @@ void run_signal_generator_tests() {
     CHECK(wideBins > narrowBins);
   }
 
-  // Shaped envelopes (Sinc/Gaussian/Hann): still 0 outside [0, duration) like
-  // Rectangular, but peak at the window center and taper towards its edges
-  // instead of switching abruptly.
+  // Sinc envelope: one full window per period (envelopeSincFreqHz), peaking
+  // at the center and tapering to (exactly, by construction) zero at the
+  // period's edges instead of switching abruptly like Rectangular.
   {
-    for (EnvelopeShape shape : {EnvelopeShape::Sinc, EnvelopeShape::Gaussian, EnvelopeShape::Hann}) {
-      GeneratorConfig cfg;
-      cfg.type = WaveformType::Pulse;
-      cfg.sampleRateHz = sampleRate;
-      cfg.pulseDurationSec = 20e-6; // 20 samples on
-      cfg.pulsePeriodSec = 40e-6;   // 20 off
-      cfg.envelopeShape = shape;
-      cfg.amplitude = 1.0f;
-      SignalGenerator gen(cfg);
+    GeneratorConfig cfg;
+    cfg.type = WaveformType::Tone;
+    cfg.sampleRateHz = sampleRate;
+    cfg.toneFreqHz = 0.0; // constant real carrier, easier to inspect the envelope alone
+    cfg.envelopeEnabled = true;
+    cfg.envelopeShape = EnvelopeShape::Sinc;
+    cfg.envelopeSincFreqHz = 25e3; // period = 40 samples at 1 MHz
+    cfg.amplitude = 1.0f;
+    SignalGenerator gen(cfg);
 
-      std::vector<Sample> buf(40);
-      gen.generate(buf.data(), buf.size());
+    std::vector<Sample> buf(40);
+    gen.generate(buf.data(), buf.size());
 
-      CHECK(std::abs(buf[10].real()) > 0.9f); // window center (sample 10 of 20): near full amplitude
-      CHECK(std::abs(buf[0].real()) < std::abs(buf[10].real())); // tapered at the window's start edge
-      for (size_t i = 20; i < 30; ++i) {
-        CHECK(buf[i].real() == 0.0f); // still silent outside the window
-        CHECK(buf[i].imag() == 0.0f);
-      }
-    }
+    CHECK(std::abs(buf[20].real()) > 0.9f);                      // window center: near full amplitude
+    CHECK(std::abs(buf[0].real()) < std::abs(buf[20].real()));   // tapered at the period's start edge
+    CHECK(std::abs(buf[0].real()) < 0.01f);                      // edge is (near) zero, not abruptly cut
+  }
+
+  // Gaussian envelope: a bump of width envelopeGaussianSigmaSec repeating at
+  // envelopeGaussianFreqHz, peaking at the center of each period and decaying
+  // smoothly (never a hard cutoff, unlike Rectangular) towards the edges.
+  {
+    GeneratorConfig cfg;
+    cfg.type = WaveformType::Tone;
+    cfg.sampleRateHz = sampleRate;
+    cfg.toneFreqHz = 0.0;
+    cfg.envelopeEnabled = true;
+    cfg.envelopeShape = EnvelopeShape::Gaussian;
+    cfg.envelopeGaussianFreqHz = 25e3;         // period = 40 samples
+    cfg.envelopeGaussianSigmaSec = 40e-6 / 6.0; // edges sit at ~+-3 sigma
+    cfg.amplitude = 1.0f;
+    SignalGenerator gen(cfg);
+
+    std::vector<Sample> buf(40);
+    gen.generate(buf.data(), buf.size());
+
+    CHECK(std::abs(buf[20].real()) > 0.9f);                     // window center: near full amplitude
+    CHECK(std::abs(buf[0].real()) < std::abs(buf[20].real()));  // decayed at the period's start edge
+    CHECK(std::abs(buf[0].real()) < 0.02f);                     // ~3 sigma out: small but not necessarily exact 0
+  }
+
+  // Sine envelope: a classic AM-style sinusoid at envelopeSineFreqHz.
+  // envelopeModDepth == 1.0 (full depth) swings the gain all the way from 0
+  // at the trough to 1 at the peak, matching 100% AM modulation depth.
+  {
+    GeneratorConfig cfg;
+    cfg.type = WaveformType::Tone;
+    cfg.sampleRateHz = sampleRate;
+    cfg.toneFreqHz = 0.0;
+    cfg.envelopeEnabled = true;
+    cfg.envelopeShape = EnvelopeShape::Sine;
+    cfg.envelopeSineFreqHz = 25e3; // period = 40 samples
+    cfg.envelopeModDepth = 1.0f;
+    cfg.amplitude = 1.0f;
+    SignalGenerator gen(cfg);
+
+    std::vector<Sample> buf(40);
+    gen.generate(buf.data(), buf.size());
+
+    CHECK(std::abs(buf[10].real()) > 0.99f); // quarter period: sin(pi/2) == 1 -> full gain
+    CHECK(std::abs(buf[30].real()) < 0.01f); // three-quarter period: sin(3pi/2) == -1 -> ~0 gain
+  }
+
+  // A shallower modulation depth should leave a nonzero floor at the trough
+  // instead of reaching all the way to 0.
+  {
+    GeneratorConfig cfg;
+    cfg.type = WaveformType::Tone;
+    cfg.sampleRateHz = sampleRate;
+    cfg.toneFreqHz = 0.0;
+    cfg.envelopeEnabled = true;
+    cfg.envelopeShape = EnvelopeShape::Sine;
+    cfg.envelopeSineFreqHz = 25e3;
+    cfg.envelopeModDepth = 0.5f;
+    cfg.amplitude = 1.0f;
+    SignalGenerator gen(cfg);
+
+    std::vector<Sample> buf(40);
+    gen.generate(buf.data(), buf.size());
+
+    CHECK(std::abs(buf[30].real()) > 0.49f && std::abs(buf[30].real()) < 0.51f); // trough floored at 1-depth
   }
 
   // Add noise: average total power E[|signal + noise|^2] should land near
