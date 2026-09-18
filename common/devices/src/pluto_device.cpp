@@ -186,6 +186,14 @@ bool PlutoDevice::startTx(std::shared_ptr<ISampleSource> source, std::string& er
   }
   if (txRunning_.load()) return true;
 
+  // txThreadFunc() may have already exited on its own (source exhausted, or
+  // a fatal streaming error) without anyone having called stopTx() to join
+  // it -- reusing txThread_/txBuf_ below without cleaning that up first
+  // would terminate() (assigning a new std::thread over a still-joinable
+  // one) or leak/misuse the old buffer. stopTx() is idempotent, so it's
+  // always safe to call here even if nothing actually needs cleaning up.
+  stopTx();
+
   txBuf_ = iio_device_create_buffer(txDev_, kBufferSamples, false);
   if (!txBuf_) {
     errorOut = "Failed to create PlutoSDR TX buffer";
@@ -199,9 +207,17 @@ bool PlutoDevice::startTx(std::shared_ptr<ISampleSource> source, std::string& er
 }
 
 void PlutoDevice::stopTx() {
-  if (!txRunning_.exchange(false)) return;
+  // Gated on txThread_.joinable() rather than txRunning_: txThreadFunc()
+  // clears txRunning_ itself when it exits on its own (source exhausted or a
+  // fatal streaming error, e.g. the device being unplugged), which happens
+  // well before anyone joins it. Using txRunning_ as the join gate would skip
+  // the join in that case, leaving a joinable std::thread whose destructor
+  // calls std::terminate() -- an instant, silent crash with no exception and
+  // nothing to log. Checking joinable() directly means this always joins
+  // exactly when there is a thread to join, regardless of who noticed first.
   txStopFlag_ = true;
   if (txThread_.joinable()) txThread_.join();
+  txRunning_ = false;
   if (txBuf_) {
     // The AD9361 TX DMA keeps repeating the last buffer it was handed even
     // after the host stops pushing new ones -- there's no implicit mute on
@@ -229,6 +245,10 @@ bool PlutoDevice::startRx(RxCallback callback, std::string& errorOut) {
   }
   if (rxRunning_.load()) return true;
 
+  // See the matching comment in startTx(): rxThreadFunc() may have already
+  // exited (and cleared rxRunning_) without being joined.
+  stopRx();
+
   rxBuf_ = iio_device_create_buffer(rxDev_, kBufferSamples, false);
   if (!rxBuf_) {
     errorOut = "Failed to create PlutoSDR RX buffer";
@@ -242,9 +262,11 @@ bool PlutoDevice::startRx(RxCallback callback, std::string& errorOut) {
 }
 
 void PlutoDevice::stopRx() {
-  if (!rxRunning_.exchange(false)) return;
+  // See the matching comment in stopTx(): gated on joinable(), not
+  // rxRunning_, so a self-exited (unjoined) thread still gets joined here.
   rxStopFlag_ = true;
   if (rxThread_.joinable()) rxThread_.join();
+  rxRunning_ = false;
   if (rxBuf_) {
     iio_buffer_destroy(rxBuf_);
     rxBuf_ = nullptr;
@@ -254,21 +276,29 @@ void PlutoDevice::stopRx() {
 void PlutoDevice::txThreadFunc(std::shared_ptr<ISampleSource> source) {
   std::vector<Sample> block(kBufferSamples);
 
-  while (!txStopFlag_.load()) {
-    size_t got = source->generate(block.data(), kBufferSamples);
-    if (got == 0) break; // source exhausted (non-looping file finished)
+  // Any exception escaping a std::thread's entry function calls
+  // std::terminate() -- the same silent, dialog-less crash as the
+  // join-skipping bug this function's callers guard against elsewhere.
+  // Nothing here is currently expected to throw, but guard against it
+  // anyway so a future change to ISampleSource can't turn into a hard crash.
+  try {
+    while (!txStopFlag_.load()) {
+      size_t got = source->generate(block.data(), kBufferSamples);
+      if (got == 0) break; // source exhausted (non-looping file finished)
 
-    ptrdiff_t inc = iio_buffer_step(txBuf_);
-    char* end = static_cast<char*>(iio_buffer_end(txBuf_));
-    size_t i = 0;
-    for (char* p = static_cast<char*>(iio_buffer_first(txBuf_, txChanI_)); p < end && i < got; p += inc, ++i) {
-      int16_t* iq = reinterpret_cast<int16_t*>(p);
-      iq[0] = static_cast<int16_t>(std::clamp(block[i].real(), -1.0f, 1.0f) * kHostToDevice);
-      iq[1] = static_cast<int16_t>(std::clamp(block[i].imag(), -1.0f, 1.0f) * kHostToDevice);
+      ptrdiff_t inc = iio_buffer_step(txBuf_);
+      char* end = static_cast<char*>(iio_buffer_end(txBuf_));
+      size_t i = 0;
+      for (char* p = static_cast<char*>(iio_buffer_first(txBuf_, txChanI_)); p < end && i < got; p += inc, ++i) {
+        int16_t* iq = reinterpret_cast<int16_t*>(p);
+        iq[0] = static_cast<int16_t>(std::clamp(block[i].real(), -1.0f, 1.0f) * kHostToDevice);
+        iq[1] = static_cast<int16_t>(std::clamp(block[i].imag(), -1.0f, 1.0f) * kHostToDevice);
+      }
+
+      ssize_t pushed = iio_buffer_push(txBuf_);
+      if (pushed < 0) break; // device gone / fatal streaming error
     }
-
-    ssize_t pushed = iio_buffer_push(txBuf_);
-    if (pushed < 0) break; // device gone / fatal streaming error
+  } catch (...) {
   }
 
   txRunning_ = false;
@@ -278,18 +308,22 @@ void PlutoDevice::rxThreadFunc(RxCallback callback) {
   std::vector<Sample> block;
   block.reserve(kBufferSamples);
 
-  while (!rxStopFlag_.load()) {
-    ssize_t nbytes = iio_buffer_refill(rxBuf_);
-    if (nbytes < 0) break; // device gone / fatal streaming error
+  // See the matching comment in txThreadFunc().
+  try {
+    while (!rxStopFlag_.load()) {
+      ssize_t nbytes = iio_buffer_refill(rxBuf_);
+      if (nbytes < 0) break; // device gone / fatal streaming error
 
-    block.clear();
-    ptrdiff_t inc = iio_buffer_step(rxBuf_);
-    char* end = static_cast<char*>(iio_buffer_end(rxBuf_));
-    for (char* p = static_cast<char*>(iio_buffer_first(rxBuf_, rxChanI_)); p < end; p += inc) {
-      const int16_t* iq = reinterpret_cast<const int16_t*>(p);
-      block.emplace_back(iq[0] * kDeviceToHost, iq[1] * kDeviceToHost);
+      block.clear();
+      ptrdiff_t inc = iio_buffer_step(rxBuf_);
+      char* end = static_cast<char*>(iio_buffer_end(rxBuf_));
+      for (char* p = static_cast<char*>(iio_buffer_first(rxBuf_, rxChanI_)); p < end; p += inc) {
+        const int16_t* iq = reinterpret_cast<const int16_t*>(p);
+        block.emplace_back(iq[0] * kDeviceToHost, iq[1] * kDeviceToHost);
+      }
+      if (!block.empty()) callback(block.data(), block.size());
     }
-    if (!block.empty()) callback(block.data(), block.size());
+  } catch (...) {
   }
 
   rxRunning_ = false;
