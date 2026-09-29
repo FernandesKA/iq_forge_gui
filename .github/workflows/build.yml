@@ -85,6 +85,7 @@ jobs:
   # эксплуатации в апреле 2025), поэтому сборка под 20.04 делается через
   # Docker-контейнер ubuntu:20.04 на обычном ubuntu-latest раннере.
   build-linux-2004:
+    name: build-linux (ubuntu-20.04)
     runs-on: ubuntu-latest
     container:
       image: ubuntu:20.04
@@ -102,7 +103,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y \
-            build-essential cmake pkg-config dpkg-dev wget \
+            build-essential cmake pkg-config dpkg-dev wget file \
             libglfw3-dev libgl1-mesa-dev \
             libiio-dev libhackrf-dev libfftw3-dev
 
