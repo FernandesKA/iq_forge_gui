@@ -81,6 +81,91 @@ jobs:
           name: iqforge-appimage-${{ matrix.os }}
           path: dist-appimage/*.AppImage
 
+  # GitHub больше не предоставляет хостед-раннеры ubuntu-20.04 (сняты с
+  # эксплуатации в апреле 2025), поэтому сборка под 20.04 делается через
+  # Docker-контейнер ubuntu:20.04 на обычном ubuntu-latest раннере.
+  build-linux-2004:
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:20.04
+    steps:
+      - name: Install git
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y git ca-certificates
+
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y \
+            build-essential cmake pkg-config dpkg-dev wget \
+            libglfw3-dev libgl1-mesa-dev \
+            libiio-dev libhackrf-dev libfftw3-dev
+
+      - name: Determine package version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DIQFORGE_BUILD_TESTS=ON -DIQFORGE_PACKAGE_VERSION=${{ steps.version.outputs.value }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Create Debian package
+        run: cpack --config build/CPackConfig.cmake -G DEB
+
+      - name: Install AppImageTool
+        run: |
+          wget -O appimagetool-x86_64.AppImage https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+
+      - name: Create AppImage
+        run: |
+          mkdir -p dist-appimage
+          mkdir -p appimage-root/usr/bin
+          cp build/common/iqforge appimage-root/usr/bin/iqforge
+          mkdir -p appimage-root/usr/share/applications
+          mkdir -p appimage-root/usr/share/doc/iqforge
+          cp assets/iqforge.desktop appimage-root/usr/share/applications/iqforge.desktop
+          cp assets/iqforge.desktop appimage-root/iqforge.desktop
+          mkdir -p appimage-root/usr/share/icons/hicolor/256x256/apps
+          cp assets/iqforge.png appimage-root/usr/share/icons/hicolor/256x256/apps/iqforge.png
+          cp assets/iqforge.png appimage-root/iqforge.png
+          ln -s usr/bin/iqforge appimage-root/AppRun
+          cp README.md appimage-root/usr/share/doc/iqforge/README
+          ./appimagetool-x86_64.AppImage --appimage-extract-and-run appimage-root dist-appimage/iqforge.AppImage
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: iqforge-linux-ubuntu-20.04-binary
+          path: build/common/iqforge
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: iqforge-deb-ubuntu-20.04
+          path: ./*.deb
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: iqforge-appimage-ubuntu-20.04
+          path: dist-appimage/*.AppImage
+
   # Отдельный self-hosted job (Debian 13.6, physical machine).
   # ВАЖНО: намеренно НЕ запускается на pull_request — self-hosted раннер не
   # эфемерный, и прогон произвольного PR-кода на нём (в т.ч. из форков)
@@ -232,7 +317,7 @@ jobs:
           path: iqforge-*-win64.exe
 
   release:
-    needs: [build-linux, build-linux-selfhosted, build-windows]
+    needs: [build-linux, build-linux-2004, build-linux-selfhosted, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -293,6 +378,24 @@ jobs:
           name: iqforge-appimage-ubuntu-latest
           path: linux-latest-appimage
 
+      - name: Download binary (20.04)
+        uses: actions/download-artifact@v4
+        with:
+          name: iqforge-linux-ubuntu-20.04-binary
+          path: linux-20.04
+
+      - name: Download Debian (20.04)
+        uses: actions/download-artifact@v4
+        with:
+          name: iqforge-deb-ubuntu-20.04
+          path: linux-20.04-deb
+
+      - name: Download AppImage (20.04)
+        uses: actions/download-artifact@v4
+        with:
+          name: iqforge-appimage-ubuntu-20.04
+          path: linux-20.04-appimage
+
       # ---- Debian 13.6 (self-hosted) artifacts ----
       - name: Download binary (Debian 13.6)
         uses: actions/download-artifact@v4
@@ -330,12 +433,20 @@ jobs:
           mkdir -p dist
 
           # Linux binaries
+          cp linux-20.04/iqforge dist/iqforge-linux-20.04
           cp linux-22.04/iqforge dist/iqforge-linux-22.04
           cp linux-24.04/iqforge dist/iqforge-linux-24.04
           cp linux-latest/iqforge dist/iqforge-linux-latest
           cp linux-debian-13.6/iqforge dist/iqforge-linux-debian-13.6
 
           # Debian packages: rename to include OS version
+          cd linux-20.04-deb
+          for f in *.deb; do
+            mv "$f" "${f%.deb}-ubuntu20.04.deb"
+          done
+          cp *.deb ../dist/
+          cd ..
+
           cd linux-22.04-deb
           for f in *.deb; do
             mv "$f" "${f%.deb}-ubuntu22.04.deb"
@@ -365,6 +476,13 @@ jobs:
           cd ..
 
           # AppImages: rename similarly
+          cd linux-20.04-appimage
+          for f in *.AppImage; do
+            mv "$f" "${f%.AppImage}-ubuntu20.04.AppImage"
+          done
+          cp *.AppImage ../dist/
+          cd ..
+
           cd linux-22.04-appimage
           for f in *.AppImage; do
             mv "$f" "${f%.AppImage}-ubuntu22.04.AppImage"
@@ -405,6 +523,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            dist/iqforge-linux-20.04
             dist/iqforge-linux-22.04
             dist/iqforge-linux-24.04
             dist/iqforge-linux-latest
