@@ -70,7 +70,7 @@ add_executable(iqforge
   ${IQFORGE_ICON_RC}
 )
 target_include_directories(iqforge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/gui/inc)
-target_link_libraries(iqforge PRIVATE iqforge_core implot imgui)
+target_link_libraries(iqforge PRIVATE iqforge_core implot imgui ${CMAKE_DL_LIBS})
 
 if(WIN32)
   # Without this, iqforge.exe links as a console-subsystem app, so launching
