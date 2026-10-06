@@ -141,16 +141,18 @@ PrbsSpec prbsSpec(PrbsPolynomial p) {
 }
 
 // One Galois-LFSR step for the trinomial x^order + x^tap + 1: shifts right,
-// XOR-ing in the tap mask whenever the bit shifted out was 1. Register stays
-// within [0, 2^order) on its own -- both XOR'd bits (order-1 and
-// order-1-tap) fall inside that range, so no masking is needed. Returns the
-// bit shifted out.
+// XOR-ing in the tap mask whenever the bit shifted out was 1. The mask bits
+// (order-1 and tap-1) make the output bit stream equal, up to a cyclic shift,
+// to the standard Fibonacci (ITU-T O.150 style) generator for the same
+// polynomial; using bit order-1-tap instead would implement the reciprocal
+// polynomial and emit that stream time-reversed. Register stays within
+// [0, 2^order) on its own, so no masking is needed. Returns the bit shifted out.
 int lfsrStep(uint32_t& reg, int order, int tap) {
   const uint32_t outBit = reg & 1u;
   reg >>= 1;
   if (outBit) {
     reg ^= (1u << (order - 1));
-    reg ^= (1u << (order - 1 - tap));
+    reg ^= (1u << (tap - 1));
   }
   return static_cast<int>(outBit);
 }
@@ -453,7 +455,7 @@ void SignalGenerator::generatePrbsQpsk(Sample* out, size_t count, const Generato
   for (size_t i = 0; i < count; ++i) {
     Sample acc(0.0f, 0.0f);
     for (int j = -kRrcHalfSpanSymbols; j <= kRrcHalfSpanSymbols; ++j) {
-      const double tau = j + phase; // time offset to that symbol, in symbol periods
+      const double tau = phase - j; // time offset from symbol j (at t = j) to now, in symbol periods
       const float h = static_cast<float>(rrcShape(tau, beta));
       acc += prbsSymbolWindow_[kRrcHalfSpanSymbols + j] * h;
     }

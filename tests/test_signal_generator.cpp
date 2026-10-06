@@ -374,6 +374,62 @@ void run_signal_generator_tests() {
     CHECK(!allSame);
   }
 
+  // PRBS bit order must match the standard (ITU-T O.150 style) Fibonacci
+  // generator for x^order + x^tap + 1, up to a cyclic shift -- otherwise a
+  // standard PRBS analyzer never locks. The reciprocal polynomial also gives a
+  // maximal-length sequence (so the autocorrelation test above can't tell),
+  // but it emits the reference stream time-reversed.
+  {
+    struct PrbsRefCase {
+      PrbsPolynomial poly;
+      int order;
+      int tap;
+    };
+    const std::vector<PrbsRefCase> cases = {
+        {PrbsPolynomial::Prbs7, 7, 6},
+        {PrbsPolynomial::Prbs9, 9, 5},
+        {PrbsPolynomial::Prbs11, 11, 9},
+        {PrbsPolynomial::Prbs15, 15, 14},
+    };
+    for (const PrbsRefCase& test : cases) {
+      const size_t period = (1u << test.order) - 1u;
+      std::vector<int> ref(period);
+      uint32_t reg = (1u << test.order) - 1u;
+      for (size_t i = 0; i < period; ++i) {
+        const int bit = static_cast<int>(((reg >> (test.order - 1)) ^ (reg >> (test.tap - 1))) & 1u);
+        reg = ((reg << 1) | static_cast<uint32_t>(bit)) & ((1u << test.order) - 1u);
+        ref[i] = bit;
+      }
+
+      GeneratorConfig cfg;
+      cfg.type = WaveformType::Prbs;
+      cfg.sampleRateHz = sampleRate;
+      cfg.prbsBitRateHz = sampleRate; // 1 sample/bit
+      cfg.prbsPolynomial = test.poly;
+      cfg.amplitude = 1.0f;
+      SignalGenerator gen(cfg);
+      std::vector<Sample> buf(period);
+      gen.generate(buf.data(), buf.size());
+      std::vector<int> bits(period);
+      for (size_t i = 0; i < period; ++i) bits[i] = buf[i].real() > 0.0f ? 1 : 0;
+
+      // Any `order` consecutive bits occur exactly once per m-sequence period,
+      // so they pin down the shift; the rest of the period must then agree.
+      size_t offset = period;
+      for (size_t s = 0; s < period && offset == period; ++s) {
+        bool match = true;
+        for (int k = 0; k < test.order && match; ++k) match = ref[(s + k) % period] == bits[k];
+        if (match) offset = s;
+      }
+      CHECK(offset < period);
+      size_t mismatches = 0;
+      for (size_t i = 0; i < period && offset < period; ++i) {
+        if (bits[i] != ref[(offset + i) % period]) ++mismatches;
+      }
+      CHECK(mismatches == 0);
+    }
+  }
+
   // PRBS + QPSK/RRC shaping: bit pairs become QPSK symbols pulse-shaped by a
   // root-raised-cosine filter, so the output should be complex (both I and Q
   // active, unlike the raw real bit stream above), stay reasonably bounded,
@@ -396,7 +452,9 @@ void run_signal_generator_tests() {
 
       bool haveQ = std::any_of(buf.begin(), buf.end(), [](const Sample& s) { return s.imag() != 0.0f; });
       CHECK(haveQ);
-      for (const auto& s : buf) CHECK(std::abs(s) < 2.0f); // bounded despite RRC overshoot
+      // Bounded despite RRC overshoot: |s| <= sum_j |h(t - j)|, which for the
+      // peak-normalized pulse over +-6 symbols reaches ~2.36 at roll-off 0.05.
+      for (const auto& s : buf) CHECK(std::abs(s) < 2.5f);
 
       FftProcessor fft({fftSize, WindowType::Hann, 1.0f});
       std::vector<float> db;
@@ -412,6 +470,28 @@ void run_signal_generator_tests() {
     size_t narrowBins = occupiedBandwidthBins(0.05f);
     size_t wideBins = occupiedBandwidthBins(0.9f);
     CHECK(wideBins > narrowBins);
+  }
+
+  // QPSK/RRC output must be a smooth pulse-shaped waveform: at 16 samples per
+  // symbol adjacent samples can only differ a little. Evaluating the pulse at
+  // the wrong time offset (mirroring the symbol window) still hits the right
+  // values at symbol instants, but jumps at every symbol boundary.
+  {
+    GeneratorConfig cfg;
+    cfg.type = WaveformType::Prbs;
+    cfg.sampleRateHz = sampleRate;
+    cfg.prbsPolynomial = PrbsPolynomial::Prbs15;
+    cfg.prbsQpskEnabled = true;
+    cfg.prbsBitRateHz = sampleRate / 8.0; // symbol rate = Fs/16 -> 16 samples/symbol
+    cfg.prbsRrcRolloff = 0.35f;
+    cfg.amplitude = 1.0f;
+    SignalGenerator gen(cfg);
+
+    std::vector<Sample> buf(16 * 2000);
+    gen.generate(buf.data(), buf.size());
+    float maxStep = 0.0f;
+    for (size_t i = 1; i < buf.size(); ++i) maxStep = std::max(maxStep, std::abs(buf[i] - buf[i - 1]));
+    CHECK(maxStep < 0.5f);
   }
 
   // Sinc envelope: one full window per period (envelopeSincFreqHz), peaking
