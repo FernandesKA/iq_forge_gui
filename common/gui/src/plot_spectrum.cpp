@@ -411,6 +411,9 @@ void plotSpectrum(const char* plotId, const std::vector<float>& db, double sampl
   if ((!view.hadData && !db.empty()) || scaleChanged) {
     fitRequested = true;
     view.fitSettleFrames = kFitSettleFrames;
+    // A new capture (or a new span) makes any hand-picked Y view
+    // meaningless -- go back to following the data vertically.
+    view.zoom.autoFit = true;
   }
   view.hadData |= !db.empty();
   view.sampleRateHz = sampleRateHz;
@@ -438,10 +441,14 @@ void plotSpectrum(const char* plotId, const std::vector<float>& db, double sampl
   drawTraceControls(view);
   updateAccumulators(view, db);
 
-  fitRequested |= ImGui::Button("Fit signal");
+  if (ImGui::Button("Fit signal")) {
+    fitRequested = true;
+    view.zoom.autoFit = true;
+  }
   ImGui::SameLine();
   AxisZoomRequest zoomReq = drawAxisZoomButtons(view.zoom.valid && !db.empty());
   mergeZoomRequest(zoomReq, consumeWheelZoomRequest(view.zoom));
+  noteManualYZoom(zoomReq, view.zoom);
   ImGui::SameLine();
   ImGui::TextDisabled("Ctrl+click: place marker, Shift+drag: measure a range");
   ImGui::SameLine();
@@ -463,13 +470,22 @@ void plotSpectrum(const char* plotId, const std::vector<float>& db, double sampl
     ImPlot::SetupAxes("Frequency (Hz, baseband)", "Power (dBFS)");
     if (!db.empty()) {
       auto [minIt, maxIt] = std::minmax_element(db.begin(), db.end());
-      softenAxisToData(ImAxis_X1, -sampleRateHz / 2.0, sampleRateHz / 2.0, view.zoom, 0.02);
-      softenAxisToData(ImAxis_Y1, *minIt, *maxIt, view.zoom, 0.1);
       if (fitRequested) {
         // X (frequency) fits flush; Y gets the same margin as the pan
-        // limit above so the curve isn't drawn right up to the border.
+        // limit below so the curve isn't drawn right up to the border.
         ImPlot::SetupAxisLimits(ImAxis_X1, -sampleRateHz / 2.0, sampleRateHz / 2.0, ImPlotCond_Always);
         fitAxisWithMargin(ImAxis_Y1, *minIt, *maxIt, 0.1);
+      } else {
+        softenAxisToData(ImAxis_X1, -sampleRateHz / 2.0, sampleRateHz / 2.0, view.zoom, 0.02);
+        // While the Y axis is still in auto mode, only ever grow it: a view
+        // that is fitted once and then nudged inward (softenAxisToData)
+        // ends up clipping the peak of any later, louder sweep -- see
+        // growAxisToData() in plot_zoom_controls.h.
+        if (view.zoom.autoFit) {
+          growAxisToData(ImAxis_Y1, *minIt, *maxIt, view.zoom, 0.1);
+        } else {
+          softenAxisToData(ImAxis_Y1, *minIt, *maxIt, view.zoom, 0.1);
+        }
       }
     }
     if (!fitRequested) applyAxisZoom(zoomReq, view.zoom);
@@ -512,6 +528,7 @@ void plotSpectrum(const char* plotId, const std::vector<float>& db, double sampl
     }
     captureWheelZoomRequest(view.zoom);
     captureAxisZoomState(view.zoom);
+    captureManualScaleInteraction(view.zoom);
     ImPlot::EndPlot();
   }
   ImGui::EndChild();

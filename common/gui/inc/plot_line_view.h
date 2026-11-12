@@ -121,9 +121,11 @@ void drawLineView(const char* plotId, const char* yLabel, size_t count, bool res
                    SharedXAxisLink& xLink, TimeMarkerState& markers, TimeRangeSelection& rangeSel,
                    ComputeYRange&& computeYRange, DrawLines&& drawLines) {
   bool fitRequested = ImGui::Button("Fit signal");
+  if (fitRequested) view.zoom.autoFit = true;
   ImGui::SameLine();
   AxisZoomRequest zoomReq = drawAxisZoomButtons(view.zoom.valid && count > 0);
   mergeZoomRequest(zoomReq, consumeWheelZoomRequest(view.zoom));
+  noteManualYZoom(zoomReq, view.zoom);
   ImGui::SameLine();
   ImGui::TextDisabled("Ctrl+click: place marker, Shift+drag: measure a range");
   ImGui::SameLine();
@@ -142,6 +144,9 @@ void drawLineView(const char* plotId, const char* yLabel, size_t count, bool res
   if ((!view.hadData && hasData) || resetView) {
     fitRequested = true;
     view.fitSettleFrames = kFitSettleFrames;
+    // A new signal (or a trigger reset) makes any hand-picked Y view
+    // meaningless -- go back to following the data vertically.
+    view.zoom.autoFit = true;
   }
   // Keep re-fitting while `count` is still changing frame to frame -- e.g.
   // right after TX/RX starts, while the trigger's window (or the raw
@@ -173,8 +178,6 @@ void drawLineView(const char* plotId, const char* yLabel, size_t count, bool res
     if (hasData) {
       double lo = 0.0, hi = 0.0;
       computeYRange(lo, hi);
-      softenAxisToData(ImAxis_X1, 0.0, static_cast<double>(count - 1), view.zoom, 0.05);
-      softenAxisToData(ImAxis_Y1, lo, hi, view.zoom, 0.1);
       if (fitRequested) {
         // Written to xLink directly (not just via SetupAxisLimits) so a
         // fit on this plot is immediately visible to its siblings too, even
@@ -186,6 +189,17 @@ void drawLineView(const char* plotId, const char* yLabel, size_t count, bool res
         xLink.max = static_cast<double>(count - 1);
         ImPlot::SetupAxisLimits(ImAxis_X1, xLink.min, xLink.max, ImPlotCond_Always);
         fitAxisWithMargin(ImAxis_Y1, lo, hi, 0.1);
+      } else {
+        softenAxisToData(ImAxis_X1, 0.0, static_cast<double>(count - 1), view.zoom, 0.05);
+        // While Y is still in auto mode, only ever grow it (see
+        // growAxisToData() in plot_zoom_controls.h): a view fitted once and
+        // then only nudged inward clips anything that later grows past it,
+        // e.g. an amplitude ramp right after TX/RX starts.
+        if (view.zoom.autoFit) {
+          growAxisToData(ImAxis_Y1, lo, hi, view.zoom, 0.1);
+        } else {
+          softenAxisToData(ImAxis_Y1, lo, hi, view.zoom, 0.1);
+        }
       }
     }
     if (!fitRequested) applyAxisZoom(zoomReq, view.zoom);
@@ -212,6 +226,7 @@ void drawLineView(const char* plotId, const char* yLabel, size_t count, bool res
     }
     captureWheelZoomRequest(view.zoom);
     captureAxisZoomState(view.zoom);
+    captureManualScaleInteraction(view.zoom);
     ImPlot::EndPlot();
   }
 }

@@ -3,6 +3,7 @@
 #include <imgui.h>
 #include <implot.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -77,6 +78,13 @@ struct AxisZoomState {
   // top of the *next* frame instead, the same one-frame-lag the H/V buttons
   // already rely on via `limits` above.
   AxisZoomRequest pendingWheel;
+  // True while the plot's amplitude axis (Y, or both axes for the equal-scale
+  // constellation view) still follows the data on its own (see
+  // growAxisToData() below): the view expands whenever the data would
+  // otherwise climb out of it. Any by-hand zoom/pan of that axis clears it,
+  // so a view the user picked deliberately isn't fought over; "Fit signal",
+  // a double-click, or a new capture arms it again.
+  bool autoFit = true;
 };
 
 // Draws independent horizontal/vertical zoom buttons. Call before BeginPlot().
@@ -136,11 +144,42 @@ inline void applyAxisZoom(const AxisZoomRequest& req, const AxisZoomState& state
   if (req.zoomOutY) zoomAxis(ImAxis_Y1, state.limits.Y, kZoomOutFactor, req.anchorY);
 }
 
+// Call once per frame with the merged button/wheel request, before the plot:
+// a by-hand Y zoom means the user picked that view, so stop the automatic Y
+// follow (growAxisToData() below) instead of having the next sweep override
+// it. "Fit signal"/double-click arm it again.
+inline void noteManualYZoom(const AxisZoomRequest& req, AxisZoomState& state) {
+  if (req.zoomInY || req.zoomOutY) state.autoFit = false;
+}
+
+// Same, for a plot whose two axes are kept at equal scale (the constellation):
+// zooming either axis by hand pins both, since ImPlot rescales the other one
+// to preserve the aspect.
+inline void noteManualZoom(const AxisZoomRequest& req, AxisZoomState& state) {
+  if (req.zoomInX || req.zoomOutX || req.zoomInY || req.zoomOutY) state.autoFit = false;
+}
+
 // Captures the current plot limits as the baseline for the next zoom step.
 // Call right before EndPlot().
 inline void captureAxisZoomState(AxisZoomState& state) {
   state.limits = ImPlot::GetPlotLimits();
   state.valid = true;
+}
+
+// Call right before EndPlot(), after captureAxisZoomState(). A left-drag pans
+// the plot or one of its axes (and Shift+left-drag box-selects), so any of
+// those means the user just chose the view by hand; without clearing the flag
+// the next frame's automatic growth (growAxisToData()) would undo a pan that
+// deliberately pushed the trace out of the visible range. A double-click is
+// ImPlot's "fit" gesture, which arms the automatic follow again instead.
+inline void captureManualScaleInteraction(AxisZoomState& state) {
+  if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && ImPlot::IsPlotHovered()) {
+    state.autoFit = true;
+  } else if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
+             (ImPlot::IsPlotHovered() ||
+              ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))) {
+    state.autoFit = false;
+  }
 }
 
 // Captures mouse-wheel scrolling over the plot for next frame's zoom: no
@@ -281,6 +320,27 @@ inline void softenAxisToData(ImAxis axis, double lo, double hi, const AxisZoomSt
     corrected = true;
   }
   if (corrected) ImPlot::SetupAxisLimits(axis, newMin, newMax, ImPlotCond_Always);
+}
+
+// Grows an axis outward just enough to keep [lo, hi] in view, plus the same
+// margin fitAxisWithMargin() leaves -- unlike fitAxisWithMargin(), it never
+// shrinks the view. Companion to softenAxisToData() above, which can only
+// ever pull the view inward: an axis fitted once and then left alone
+// silently clips anything that later grows past it. For a live spectrum that
+// shows up as the top of the trace disappearing whenever a later sweep is
+// louder than the one the initial fit happened to catch (a pulsed TX
+// preview still ramping up, an RX gain/AGC change) -- the peak ends up above
+// the top edge and only "Fit signal" brings it back. Growing on demand,
+// instead of re-fitting every frame, keeps the axis from jittering along
+// with the noise floor. No-op while the view already contains the data, or
+// before the first frame's position has been captured.
+inline void growAxisToData(ImAxis axis, double lo, double hi, const AxisZoomState& zoom, double marginFrac = 0.1) {
+  if (!zoom.valid || !(hi > lo)) return;
+  const ImPlotRange& last = (axis == ImAxis_X1) ? zoom.limits.X : zoom.limits.Y;
+  double margin = (hi - lo) * marginFrac;
+  if (last.Min <= lo - margin && last.Max >= hi + margin) return;
+  ImPlot::SetupAxisLimits(axis, std::min(last.Min, lo - margin), std::max(last.Max, hi + margin),
+                          ImPlotCond_Always);
 }
 
 // Fits an axis to exactly [lo, hi] plus a margin, for use when "fitting" a

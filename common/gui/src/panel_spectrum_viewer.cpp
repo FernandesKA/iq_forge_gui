@@ -15,6 +15,10 @@ namespace {
 // One viewer, one persistent pan/zoom state -- unlike the per-direction
 // spectrum plots, there's only ever one of these on screen.
 AxisZoomState g_sweepZoom;
+// Last frame's "composite spectrum exists" state, so the first sweep data
+// after a (re)start fits the axes instead of leaving ImPlot's default 0..1
+// range on screen until "Fit" is pressed.
+bool g_sweepHadData = false;
 
 // Draws one band row: a select radio, an editable name, a toggle between
 // entering Start/End or the equivalent Center/Span, and the two frequency
@@ -125,25 +129,57 @@ void drawSpectrumViewerPanel(AppState& state) {
   ImGui::Separator();
 
   bool fitRequested = ImGui::Button("Fit");
+  if (fitRequested) g_sweepZoom.autoFit = true;
 
-  if (state.sweepSpectrumDb.empty()) {
+  // -160 dBFS is the "this step hasn't been swept yet" sentinel that
+  // AppState::startSweep() pre-fills the composite with, so it must not take
+  // part in the auto-scale: during the first pass it would drag the axis
+  // floor down to -160 and squeeze the real trace against the top. Also
+  // means "No sweep data" stays up until the first step has actually
+  // produced samples.
+  constexpr float kUnfilledDb = -159.0f;
+  float loDb = 0.0f, hiDb = 0.0f;
+  bool hasData = false;
+  for (float v : state.sweepSpectrumDb) {
+    if (v <= kUnfilledDb) continue;
+    loDb = hasData ? std::min(loDb, v) : v;
+    hiDb = hasData ? std::max(hiDb, v) : v;
+    hasData = true;
+  }
+
+  if (!hasData) g_sweepHadData = false;
+  if (hasData && !g_sweepHadData) {
+    fitRequested = true;
+    g_sweepZoom.autoFit = true;
+  }
+  g_sweepHadData |= hasData;
+
+  if (!hasData) {
     ImGui::TextDisabled("No sweep data yet -- select a band above and press Start sweep.");
   } else if (ImPlot::BeginPlot("##sweepspectrum", ImVec2(-1, 400))) {
     ImPlot::SetupAxes("Frequency (Hz)", "Power (dBFS)");
-    auto [minIt, maxIt] = std::minmax_element(state.sweepSpectrumDb.begin(), state.sweepSpectrumDb.end());
-    softenAxisToData(ImAxis_X1, state.sweepRangeStartHz, state.sweepRangeEndHz, g_sweepZoom, 0.02);
-    softenAxisToData(ImAxis_Y1, *minIt, *maxIt, g_sweepZoom, 0.1);
+    AxisZoomRequest zoomReq = consumeWheelZoomRequest(g_sweepZoom);
+    noteManualYZoom(zoomReq, g_sweepZoom);
     if (fitRequested) {
       ImPlot::SetupAxisLimits(ImAxis_X1, state.sweepRangeStartHz, state.sweepRangeEndHz, ImPlotCond_Always);
-      fitAxisWithMargin(ImAxis_Y1, *minIt, *maxIt, 0.1);
+      fitAxisWithMargin(ImAxis_Y1, loDb, hiDb, 0.1);
     } else {
-      applyAxisZoom(consumeWheelZoomRequest(g_sweepZoom), g_sweepZoom);
+      softenAxisToData(ImAxis_X1, state.sweepRangeStartHz, state.sweepRangeEndHz, g_sweepZoom, 0.02);
+      // Keep the top of the composite visible as later sweep steps fill in
+      // louder bins -- see growAxisToData() in plot_zoom_controls.h.
+      if (g_sweepZoom.autoFit) {
+        growAxisToData(ImAxis_Y1, loDb, hiDb, g_sweepZoom, 0.1);
+      } else {
+        softenAxisToData(ImAxis_Y1, loDb, hiDb, g_sweepZoom, 0.1);
+      }
+      applyAxisZoom(zoomReq, g_sweepZoom);
     }
     int n = static_cast<int>(state.sweepSpectrumDb.size());
     double xscale = (state.sweepRangeEndHz - state.sweepRangeStartHz) / n;
     ImPlot::PlotLine("Spectrum", state.sweepSpectrumDb.data(), n, xscale, state.sweepRangeStartHz);
     captureWheelZoomRequest(g_sweepZoom);
     captureAxisZoomState(g_sweepZoom);
+    captureManualScaleInteraction(g_sweepZoom);
     ImPlot::EndPlot();
   }
 
