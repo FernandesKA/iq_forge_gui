@@ -91,18 +91,49 @@ jobs:
       image: ubuntu:20.04
     steps:
       - name: Install git
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install -y git ca-certificates
+          # GitHub-раннеры живут в Azure, поэтому зеркало Azure заметно
+          # быстрее и стабильнее, чем archive.ubuntu.com.
+          cp /etc/apt/sources.list /tmp/sources.list.orig
+          sed -i -E 's|http://(archive|security)\.ubuntu\.com/ubuntu/?|http://azure.archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list
+
+          apt_retry() {
+            local attempts=5
+            for i in $(seq 1 "$attempts"); do
+              if "$@"; then return 0; fi
+              echo "::warning::apt attempt $i/$attempts failed: $*"
+              sleep 10
+            done
+            return 1
+          }
+
+          if ! apt_retry apt-get update -o Acquire::Retries=3 -o Acquire::ForceIPv4=true; then
+            echo "::warning::azure mirror unavailable, falling back to archive.ubuntu.com"
+            cp /tmp/sources.list.orig /etc/apt/sources.list
+            apt_retry apt-get update -o Acquire::Retries=3 -o Acquire::ForceIPv4=true
+          fi
+          apt_retry apt-get install -y --no-install-recommends git ca-certificates
 
       - uses: actions/checkout@v4
 
       - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install -y \
+          apt_retry() {
+            local attempts=5
+            for i in $(seq 1 "$attempts"); do
+              if "$@"; then return 0; fi
+              echo "::warning::apt attempt $i/$attempts failed: $*"
+              sleep 10
+            done
+            return 1
+          }
+
+          apt_retry apt-get update -o Acquire::Retries=3 -o Acquire::ForceIPv4=true
+          apt_retry apt-get install -y --no-install-recommends \
             build-essential cmake pkg-config dpkg-dev wget file \
             libglfw3-dev libgl1-mesa-dev \
             libiio-dev libhackrf-dev libfftw3-dev
