@@ -10,11 +10,9 @@ namespace iqforge {
 void plotConstellation(const char* plotId, const Sample* data, size_t count, ConstellationViewState& view,
                         bool resetView) {
   bool fitRequested = ImGui::Button("Fit signal");
-  if (fitRequested) view.zoom.autoFit = true;
   ImGui::SameLine();
   AxisZoomRequest zoomReq = drawAxisZoomButtons(view.zoom.valid && count > 0);
   mergeZoomRequest(zoomReq, consumeWheelZoomRequest(view.zoom));
-  noteManualZoom(zoomReq, view.zoom);
   ImGui::SameLine();
   HelpMarker(
       "Wheel -- zoom X\n"
@@ -24,27 +22,17 @@ void plotConstellation(const char* plotId, const Sample* data, size_t count, Con
       "H+/H-/V+/V- -- zoom one axis");
 
   bool hasData = count > 0;
-  if (!hasData) view.hadData = false;
-  if ((!view.hadData && hasData) || resetView) {
-    fitRequested = true;
-    view.fitSettleFrames = kFitSettleFrames;
-    // A new signal (or a trigger reset) makes any hand-picked scale
-    // meaningless -- go back to following the data.
-    view.zoom.autoFit = true;
-  }
-  // See drawLineView() in plot_line_view.h for why re-fitting continues
-  // while `count` is still changing and for a settle window after that --
-  // same reasoning applies here (a just-loaded/just-started signal's I/Q
-  // range isn't representative yet on its very first frame).
-  if (hasData && count != view.lastCount) fitRequested = true;
-  view.lastCount = count;
-  if (hasData && view.fitSettleFrames > 0) {
-    fitRequested = true;
-    --view.fitSettleFrames;
-  }
-  view.hadData |= hasData;
-
   if (ImPlot::BeginPlot(plotId, ImVec2(-1, 260), ImPlotFlags_Equal)) {
+    // One-shot auto-fit, same rules as drawLineView() in plot_line_view.h:
+    // first data, a discontinuous signal change, or while the window size is
+    // still settling. After that only "Fit signal"/double-click changes it.
+    if (!hasData) view.hadData = false;
+    if ((!view.hadData && hasData) || resetView || (hasData && count != view.lastCount)) {
+      fitRequested = true;
+    }
+    view.lastCount = count;
+    view.hadData |= hasData;
+
     ImPlot::SetupAxes("I", "Q");
     if (hasData) {
       float lo = data[0].real(), hi = data[0].real();
@@ -57,14 +45,6 @@ void plotConstellation(const char* plotId, const Sample* data, size_t count, Con
       if (fitRequested) {
         fitAxisWithMargin(ImAxis_X1, lo, hi, 0.1);
         fitAxisWithMargin(ImAxis_Y1, lo, hi, 0.1);
-      } else if (view.zoom.autoFit) {
-        // Grow both axes by the same amount so the square aspect (and a
-        // circle looking like a circle) survives the automatic fit.
-        growAxisToData(ImAxis_X1, lo, hi, view.zoom, 0.1);
-        growAxisToData(ImAxis_Y1, lo, hi, view.zoom, 0.1);
-      } else {
-        softenAxisToData(ImAxis_X1, lo, hi, view.zoom, 0.1);
-        softenAxisToData(ImAxis_Y1, lo, hi, view.zoom, 0.1);
       }
     }
     if (!fitRequested) applyAxisZoom(zoomReq, view.zoom);
@@ -76,7 +56,6 @@ void plotConstellation(const char* plotId, const Sample* data, size_t count, Con
     }
     captureWheelZoomRequest(view.zoom);
     captureAxisZoomState(view.zoom);
-    captureManualScaleInteraction(view.zoom);
     ImPlot::EndPlot();
   }
 }

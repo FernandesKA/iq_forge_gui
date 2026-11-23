@@ -19,8 +19,11 @@ struct LineViewState {
   // below, triggering the initial fit.
   size_t lastCount = static_cast<size_t>(-1);
   AxisZoomState zoom;
-  // See kFitSettleFrames in plot_zoom_controls.h.
-  int fitSettleFrames = 0;
+  // A resetView request that arrived while the plot wasn't actually drawn
+  // (scrolled out of view, collapsed window, hidden dock tab) -- held until
+  // the next frame BeginPlot() returns true instead of being dropped, see
+  // drawLineView() below.
+  bool resetPending = false;
 };
 
 // X-axis range shared by a family of line views (I/Q, phase, inst. freq)
@@ -35,6 +38,12 @@ struct LineViewState {
 struct SharedXAxisLink {
   double min = 0.0;
   double max = 1.0;
+  // True once the user has taken over the shared X range by hand (H+/H-/wheel)
+  // since the last signal/trigger reset or explicit "Fit signal". A sibling
+  // that only now starts being drawn (scrolled into view, tab shown) must then
+  // adopt the current min/max instead of running its own initial fit over them
+  // and discarding the manual X zoom.
+  bool xManual = false;
 };
 
 constexpr int kMaxTimeMarkers = 4;
@@ -121,11 +130,14 @@ void drawLineView(const char* plotId, const char* yLabel, size_t count, bool res
                    SharedXAxisLink& xLink, TimeMarkerState& markers, TimeRangeSelection& rangeSel,
                    ComputeYRange&& computeYRange, DrawLines&& drawLines) {
   bool fitRequested = ImGui::Button("Fit signal");
-  if (fitRequested) view.zoom.autoFit = true;
+  if (fitRequested) {
+    // "Fit signal" re-arms the shared X family: the fit below may write the
+    // shared range again.
+    xLink.xManual = false;
+  }
   ImGui::SameLine();
   AxisZoomRequest zoomReq = drawAxisZoomButtons(view.zoom.valid && count > 0);
   mergeZoomRequest(zoomReq, consumeWheelZoomRequest(view.zoom));
-  noteManualYZoom(zoomReq, view.zoom);
   ImGui::SameLine();
   ImGui::TextDisabled("Ctrl+click: place marker, Shift+drag: measure a range");
   ImGui::SameLine();
@@ -140,39 +152,40 @@ void drawLineView(const char* plotId, const char* yLabel, size_t count, bool res
       "Right-click while dragging -- cancel the selection");
 
   bool hasData = count > 0;
-  if (!hasData) view.hadData = false;
-  if ((!view.hadData && hasData) || resetView) {
-    fitRequested = true;
-    view.fitSettleFrames = kFitSettleFrames;
-    // A new signal (or a trigger reset) makes any hand-picked Y view
-    // meaningless -- go back to following the data vertically.
-    view.zoom.autoFit = true;
-  }
-  // Keep re-fitting while `count` is still changing frame to frame -- e.g.
-  // right after TX/RX starts, while the trigger's window (or the raw
-  // rolling buffer, if the trigger is off) is still filling up from empty.
-  // Fitting just once, on the very first frame any data exists, could lock
-  // onto a tiny/incomplete initial batch (e.g. the first few samples of a
-  // sine that hasn't swung negative yet) and never widen from there. Once
-  // `count` stabilizes at its steady-state size, this stops firing and
-  // manual zoom/pan takes over as usual.
-  if (hasData && count != view.lastCount) fitRequested = true;
-  view.lastCount = count;
-  // Beyond that, keep re-fitting for a further settle window: `count`
-  // stabilizing doesn't mean the *values* have -- e.g. a trigger-selected
-  // window can hold steady in size while its amplitude is still ramping up
-  // right after TX/RX starts.
-  if (hasData && view.fitSettleFrames > 0) {
-    fitRequested = true;
-    --view.fitSettleFrames;
-  }
   if (resetView) {
+    // Latch the re-fit until the plot is actually drawn: a scrolled-out-of-
+    // view (or otherwise hidden) plot returns false from BeginPlot() below,
+    // and dropping the request there would leave it stuck showing the
+    // previous signal's zoom/scale once it comes back.
+    view.resetPending = true;
+    // A new signal / trigger reset re-arms auto-fit for the whole shared X
+    // family.
+    xLink.xManual = false;
     for (TimeMarker& m : markers.markers) m.active = false;
     rangeSel.active = false;
   }
-  view.hadData |= hasData;
 
   if (ImPlot::BeginPlot(plotId, ImVec2(-1, 220))) {
+    // Commit fit bookkeeping only now that the plot is really being drawn.
+    // While it's scrolled out of view (or its dock tab/window is hidden)
+    // BeginPlot() returns false with no axes to touch; consuming the one-time
+    // fit there would leave the axis at ImPlot's empty default 0..1 once the
+    // plot was scrolled back into view, with the actual sample data
+    // (0..count-1) off-screen.
+    //
+    // Auto-fit is one-shot: it runs when this plot first gets data, when the
+    // caller reports a discontinuous signal/window change, or while the
+    // window size is still settling (e.g. TX/RX's rolling buffer filling up).
+    // After that the view stays exactly where the user left it -- no
+    // continuous "catch-up" re-fitting -- until "Fit signal"/double-click.
+    if (!hasData) view.hadData = false;
+    if ((!view.hadData && hasData) || view.resetPending || (hasData && count != view.lastCount)) {
+      fitRequested = true;
+      view.resetPending = false;
+    }
+    view.lastCount = count;
+    view.hadData |= hasData;
+
     ImPlot::SetupAxes("Sample", yLabel);
     ImPlot::SetupAxisLinks(ImAxis_X1, &xLink.min, &xLink.max);
     if (hasData) {
@@ -185,24 +198,25 @@ void drawLineView(const char* plotId, const char* yLabel, size_t count, bool res
         // xLink at Setup time, so waiting on ImPlot's own end-of-frame
         // link-sync to carry the fitted range over isn't reliable when more
         // than one sibling plot fits on the same frame.
-        xLink.min = 0.0;
-        xLink.max = static_cast<double>(count - 1);
-        ImPlot::SetupAxisLimits(ImAxis_X1, xLink.min, xLink.max, ImPlotCond_Always);
-        fitAxisWithMargin(ImAxis_Y1, lo, hi, 0.1);
-      } else {
-        softenAxisToData(ImAxis_X1, 0.0, static_cast<double>(count - 1), view.zoom, 0.05);
-        // While Y is still in auto mode, only ever grow it (see
-        // growAxisToData() in plot_zoom_controls.h): a view fitted once and
-        // then only nudged inward clips anything that later grows past it,
-        // e.g. an amplitude ramp right after TX/RX starts.
-        if (view.zoom.autoFit) {
-          growAxisToData(ImAxis_Y1, lo, hi, view.zoom, 0.1);
-        } else {
-          softenAxisToData(ImAxis_Y1, lo, hi, view.zoom, 0.1);
+        //
+        // Skipped once the user has hand-zoomed the shared X range, so a
+        // sibling that is only now being drawn (its own local "first data"
+        // fit) can't overwrite that manual zoom. Y still fits, since it isn't
+        // shared between the family members.
+        if (!xLink.xManual) {
+          xLink.min = 0.0;
+          xLink.max = static_cast<double>(count - 1);
+          ImPlot::SetupAxisLimits(ImAxis_X1, xLink.min, xLink.max, ImPlotCond_Always);
         }
+        fitAxisWithMargin(ImAxis_Y1, lo, hi, 0.1);
       }
     }
-    if (!fitRequested) applyAxisZoom(zoomReq, view.zoom);
+    if (!fitRequested) {
+      // The shared X range is now user-owned: later fits on a sibling view
+      // leave it alone (see xLink.xManual).
+      if (zoomReq.zoomInX || zoomReq.zoomOutX) xLink.xManual = true;
+      applyAxisZoom(zoomReq, view.zoom);
+    }
     if (hasData) drawLines();
     if (hasData) detail::updateMarkerPlacement(markers, count);
     if (hasData) {
@@ -226,7 +240,6 @@ void drawLineView(const char* plotId, const char* yLabel, size_t count, bool res
     }
     captureWheelZoomRequest(view.zoom);
     captureAxisZoomState(view.zoom);
-    captureManualScaleInteraction(view.zoom);
     ImPlot::EndPlot();
   }
 }

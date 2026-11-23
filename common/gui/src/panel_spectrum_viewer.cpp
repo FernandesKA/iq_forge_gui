@@ -129,7 +129,6 @@ void drawSpectrumViewerPanel(AppState& state) {
   ImGui::Separator();
 
   bool fitRequested = ImGui::Button("Fit");
-  if (fitRequested) g_sweepZoom.autoFit = true;
 
   // -160 dBFS is the "this step hasn't been swept yet" sentinel that
   // AppState::startSweep() pre-fills the composite with, so it must not take
@@ -148,10 +147,8 @@ void drawSpectrumViewerPanel(AppState& state) {
   }
 
   if (!hasData) g_sweepHadData = false;
-  if (hasData && !g_sweepHadData) {
-    fitRequested = true;
-    g_sweepZoom.autoFit = true;
-  }
+  // One-shot auto-fit: first filled sweep step only, then "Fit" by hand.
+  if (hasData && !g_sweepHadData) fitRequested = true;
   g_sweepHadData |= hasData;
 
   if (!hasData) {
@@ -159,19 +156,10 @@ void drawSpectrumViewerPanel(AppState& state) {
   } else if (ImPlot::BeginPlot("##sweepspectrum", ImVec2(-1, 400))) {
     ImPlot::SetupAxes("Frequency (Hz)", "Power (dBFS)");
     AxisZoomRequest zoomReq = consumeWheelZoomRequest(g_sweepZoom);
-    noteManualYZoom(zoomReq, g_sweepZoom);
     if (fitRequested) {
       ImPlot::SetupAxisLimits(ImAxis_X1, state.sweepRangeStartHz, state.sweepRangeEndHz, ImPlotCond_Always);
       fitAxisWithMargin(ImAxis_Y1, loDb, hiDb, 0.1);
     } else {
-      softenAxisToData(ImAxis_X1, state.sweepRangeStartHz, state.sweepRangeEndHz, g_sweepZoom, 0.02);
-      // Keep the top of the composite visible as later sweep steps fill in
-      // louder bins -- see growAxisToData() in plot_zoom_controls.h.
-      if (g_sweepZoom.autoFit) {
-        growAxisToData(ImAxis_Y1, loDb, hiDb, g_sweepZoom, 0.1);
-      } else {
-        softenAxisToData(ImAxis_Y1, loDb, hiDb, g_sweepZoom, 0.1);
-      }
       applyAxisZoom(zoomReq, g_sweepZoom);
     }
     int n = static_cast<int>(state.sweepSpectrumDb.size());
@@ -179,7 +167,6 @@ void drawSpectrumViewerPanel(AppState& state) {
     ImPlot::PlotLine("Spectrum", state.sweepSpectrumDb.data(), n, xscale, state.sweepRangeStartHz);
     captureWheelZoomRequest(g_sweepZoom);
     captureAxisZoomState(g_sweepZoom);
-    captureManualScaleInteraction(g_sweepZoom);
     ImPlot::EndPlot();
   }
 

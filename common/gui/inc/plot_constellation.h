@@ -11,8 +11,6 @@ struct ConstellationViewState {
   bool hadData = false;
   size_t lastCount = static_cast<size_t>(-1);
   AxisZoomState zoom;
-  // See kFitSettleFrames in plot_zoom_controls.h.
-  int fitSettleFrames = 0;
 };
 
 // Draws an I/Q scatter (constellation) plot for an already-computed sample
